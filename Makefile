@@ -1,36 +1,66 @@
 #!/usr/bin/env make
-include .env
+include .dev.vars
 export
 
 default:
 	@echo "Available Targets:"
 	@echo
-	@echo "  publish-site: Publish site to workers (Production)"
-	@echo "  publish-router: Publish router to workers (Production)"
-	@echo ""
-	@echo "  publish: Publish everything to workers (Production)"
+	@echo "  doom-build: Build Chocolate Doom (Emscripten/WASM) into doom/src/"
+	@echo "  doom-copy:  Copy chocolate-doom.* artifacts from doom/src/ into ./public"
+	@echo "  doom-clean: Remove doom/build and in-tree doom browser bundles"
 
-.PHONY: node_modules dist wrangler-publish test clean
+.PHONY: node_modules doom-build doom-clean doom-copy
 
-install:
-	npm install
+# Drives a CMake-based Emscripten build of Chocolate Doom 3.1.1 with the
+# WebSocket networking module and copies the resulting browser artifacts
+# (chocolate-doom.{html,js,wasm,wasm.map}) into doom/src/ where index.html
+# expects to find them.
+doom-build:
+	@cd doom && \
+	if ! command -v emcc >/dev/null 2>&1; then \
+		EMSDK_DIR="$${EMSDK:-$$HOME/emsdk}"; \
+		if [ -f "$$EMSDK_DIR/emsdk_env.sh" ]; then \
+			. "$$EMSDK_DIR/emsdk_env.sh"; \
+		else \
+			echo "error: emcc not found and $$EMSDK_DIR/emsdk_env.sh missing." >&2; \
+			echo "Install EMSDK to ~/emsdk or set \$$EMSDK, or 'brew install emscripten'." >&2; \
+			exit 1; \
+		fi; \
+	fi; \
+	export EMSDK EMSDK_NODE EMSDK_PYTHON; \
+	command -v emcmake >/dev/null 2>&1 || { echo "error: emcmake not found in PATH (after emsdk activation)." >&2; exit 1; }; \
+	command -v cmake   >/dev/null 2>&1 || { echo "error: cmake not found in PATH." >&2; echo "Install with 'brew install cmake' or your distro package manager." >&2; exit 1; }; \
+	BUILD_DIR="$${BUILD_DIR:-build}"; \
+	emcmake cmake -S . -B "$$BUILD_DIR" \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DENABLE_SDL2_NET=OFF \
+		-DENABLE_SDL2_MIXER=ON && \
+	cmake --build "$$BUILD_DIR" -j"$$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" && \
+	for ext in html js wasm wasm.map; do \
+		artifact="$$BUILD_DIR/src/chocolate-doom.$$ext"; \
+		if [ -f "$$artifact" ]; then cp "$$artifact" "src/chocolate-doom.$$ext"; fi; \
+	done; \
+	echo; \
+	echo "Build complete. Artifacts in src/:"; \
+	ls -lh src/chocolate-doom.* 2>/dev/null || true
 
-dist:
-	cp ../doom-wasm/src/websockets-doom.wasm assets/websockets-doom.wasm
-	cp ../doom-wasm/src/websockets-doom.wasm.map assets/websockets-doom.wasm.map
-	cp ../doom-wasm/src/websockets-doom.js assets/websockets-doom.js
+# Copy the built Chocolate Doom browser artifacts into ./public so they can
+# be served by the Worker assets binding. Hard-fails if any artifact is
+# missing; run `make doom-build` first.
+doom-copy:
+	@mkdir -p public
+	@for ext in js wasm wasm.map; do \
+		artifact="doom/src/chocolate-doom.$$ext"; \
+		if [ ! -f "$$artifact" ]; then \
+			echo "error: $$artifact not found; run 'make doom-build' first." >&2; \
+			exit 1; \
+		fi; \
+		cp "$$artifact" "public/chocolate-doom.$$ext"; \
+		echo "copied $$artifact -> public/chocolate-doom.$$ext"; \
+	done
 
-tail:
-	CF_ZONE_ID="$$SITE_CF_ZONE_ID" CF_ACCOUNT_ID="$$SITE_CF_ACCOUNT_ID" wrangler tail --config wrangler-site.toml
-
-publish-site:
-	make dist
-	CF_ZONE_ID="$$SITE_CF_ZONE_ID" CF_ACCOUNT_ID="$$SITE_CF_ACCOUNT_ID" wrangler publish --config wrangler-site.toml
-
-publish-router:
-	CF_ZONE_ID="$$ROUTER_CF_ZONE_ID" CF_ACCOUNT_ID="$$ROUTER_CF_ACCOUNT_ID" wrangler publish --config wrangler-router.toml
-
-publish:
-	make publish-site
-	make publish-router
+# Remove all CMake build artifacts and the in-tree browser bundle.
+doom-clean:
+	rm -rf doom/build
+	rm -f doom/src/chocolate-doom.*
 

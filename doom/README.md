@@ -18,8 +18,8 @@ Install the toolchain via Homebrew:
 brew install emscripten cmake
 ```
 
-…or use a manual EMSDK checkout. `scripts/build.sh` auto-detects an EMSDK
-install at `~/emsdk` (or wherever `$EMSDK` points):
+…or use a manual EMSDK checkout. The `doom-build` target auto-detects an
+EMSDK install at `~/emsdk` (or wherever `$EMSDK` points):
 
 ```
 git clone https://github.com/emscripten-core/emsdk.git ~/emsdk
@@ -33,12 +33,14 @@ ships and links its own SDL2 / SDL2_mixer ports.
 
 ## Compiling
 
+From the repository root:
+
 ```
-./scripts/clean.sh
-./scripts/build.sh
+make doom-clean
+make doom-build
 ```
 
-The build script invokes `emcmake cmake` followed by `cmake --build`,
+The `doom-build` target invokes `emcmake cmake` followed by `cmake --build`,
 then copies `chocolate-doom.{html,js,wasm,wasm.map}` from `build/src/`
 into `./src/` next to `index.html`.
 

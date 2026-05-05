@@ -1,0 +1,1 @@
+{"root":["./src/app/app.tsx","./src/app/main.tsx","./src/app/vite-env.d.ts","./src/worker/bindings.d.ts","./src/worker/handler.ts"],"errors":true,"version":"5.9.2"}

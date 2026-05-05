@@ -9,10 +9,6 @@ worker/
 node_modules/
 .cargo-ok
 .env
-assets/websockets-doom.wasm
-assets/websockets-doom.wasm.map
-assets/websockets-doom.js
-assets/doom1.wad
 # Logs
 logs
 *.log
@@ -143,3 +139,6 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+.dev.vars
+.wrangler

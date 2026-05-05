@@ -1,0 +1,17 @@
+{
+  "extends": ["./tsconfig.node.json"],
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.worker.tsbuildinfo",
+    "types": [
+      "vite/client",
+      "node",
+      "@types/service-worker-mock",
+      "@cloudflare/vitest-pool-workers",
+    ]
+  },
+  "include": [
+    "src/worker",
+    "lib",
+    "./worker-configuration.d.ts"
+  ]
+}

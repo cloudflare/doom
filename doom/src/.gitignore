@@ -7,7 +7,7 @@ Makefile.in
 # Generated resource files (only touched on Windows builds we don't do here).
 *.rc
 
-# Browser bundle (CMake build output is copied here by scripts/build.sh).
+# Browser bundle (CMake build output is copied here by `make doom-build`).
 chocolate-doom.html
 chocolate-doom.js
 chocolate-doom.wasm
