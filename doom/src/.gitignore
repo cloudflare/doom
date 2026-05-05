@@ -1,0 +1,22 @@
+# Legacy autotools artifacts (no longer used; kept here for safety in
+# case anyone re-runs autoreconf in an old checkout).
+Makefile
+Makefile.in
+.deps
+
+# Generated resource files (only touched on Windows builds we don't do here).
+*.rc
+
+# Browser bundle (CMake build output is copied here by scripts/build.sh).
+chocolate-doom.html
+chocolate-doom.js
+chocolate-doom.wasm
+chocolate-doom.wasm.map
+
+# Legacy executable names left from autotools builds.
+chocolate-doom
+chocolate-doom-setup
+chocolate-doom.exe
+
+tags
+TAGS
