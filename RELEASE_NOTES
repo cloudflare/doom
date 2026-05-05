@@ -1,0 +1,6 @@
+2026.5.5
+- 2026.5.5 Upgrade to Chocolate Doom 3.1.1
+- 2026.5.5 Compile with EMSDK
+- 2026.5.5 Modernize and convert doom-workers to Vite, Cloudflare Assets and React
+- 2026.5.5 Merge doom-workers and doom-wasm repos into just cloudflare/doom
+
