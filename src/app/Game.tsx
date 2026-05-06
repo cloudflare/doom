@@ -685,7 +685,7 @@ export const Game: FC = () => {
     // P_PlayerThink (NULL `mo` deref via `subsector->sector`), so we skip
     // the title cycle for solo. Multiplayer doesn't hit this path because
     // -server/-connect implicitly set netgame=true → G_InitNew.
-    setScreen({ kind: "game", args: [...COMMON_ARGS, "-warp", "1", "1"] });
+    setScreen({ kind: "game", args: [...COMMON_ARGS] });
   }, [typewriter]);
 
   const startMultiplayer = useCallback(() => {
