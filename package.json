@@ -9,6 +9,7 @@
     "build-openapi": "node scripts/build-openapi.mjs",
     "types": "wrangler types",
     "check": "tsc && vite build && wrangler deploy --dry-run",
+    "predev": "test -f .dev.vars || { printf '\\n\\033[31mError:\\033[0m .dev.vars not found.\\n\\nCreate one from .dev.vars.sample:\\n\\n  cp .dev.vars.sample .dev.vars\\n\\n' >&2; exit 1; }",
     "dev": "vite --clearScreen false",
     "lint": "eslint .",
     "preview": "npm run build && vite preview"

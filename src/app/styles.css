@@ -1,3 +1,13 @@
+/*
+@import "tailwindcss";
+@plugin "daisyui";
+@plugin '@tailwindcss/typography';
+@plugin "@tailwindcss/forms";
+@plugin "@headlessui/tailwindcss" {
+  prefix: "ui";
+}
+*/
+
 @font-face {
     font-family: "VT323";
     font-style: normal;
@@ -47,7 +57,7 @@ body {
 }
 
 #logo {
-    background-image: url("retro.png");
+    background-image: url("/retro.png");
     background-repeat: no-repeat;
     background-size: 320px 200px;
     width: 320px;
@@ -124,38 +134,28 @@ h1 a {
     overflow: hidden;
 }
 
+/* Make the canvas fill #monitorscreen regardless of its width/height
+   attributes. Otherwise, when chocolate-doom's SDL_CreateWindow sets
+   canvas.width/canvas.height to 800x600 *after* the canvas has already
+   been laid out (the script loads asynchronously in the React version),
+   the canvas line-box ends up slightly taller than its aspect-ratio'd
+   parent and the bottom of the game gets clipped by overflow:hidden.
+   A browser resize re-runs layout (and triggers SDL's
+   SDL_WINDOWEVENT_RESIZED → SDL_SetWindowSize), which is why resizing
+   "fixes" it until you reload. */
+#monitorscreen > canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
 @media all and (min-width: 960px) {
     #monitor {
-        -webkit-animation: tvflicker 3s infinite alternate;
-        -moz-animation: tvflicker 3s infinite alternate;
-        -o-animation: tvflicker 3s infinite alternate;
         animation: tvflicker 3s infinite alternate;
     }
 
-    @-webkit-keyframes tvflicker {
-        0% {
-            box-shadow: 0 0 100px 0 rgba(213, 88, 16, 0.4);
-        }
-        100% {
-            box-shadow: 0 0 95px 0 rgba(72, 32, 8, 0.45);
-        }
-    }
-    @-moz-keyframes tvflicker {
-        0% {
-            box-shadow: 0 0 100px 0 rgba(213, 88, 16, 0.4);
-        }
-        100% {
-            box-shadow: 0 0 60px 0 rgba(72, 32, 8, 0.6);
-        }
-    }
-    @-o-keyframes tvflicker {
-        0% {
-            box-shadow: 0 0 100px 0 rgba(213, 88, 16, 0.4);
-        }
-        100% {
-            box-shadow: 0 0 60px 0 rgba(72, 32, 8, 0.6);
-        }
-    }
     @keyframes tvflicker {
         0% {
             box-shadow: 0 0 100px 0 rgba(213, 88, 16, 0.4);
@@ -241,12 +241,7 @@ canvas {
 }
 
 .noselect {
-    -webkit-touch-callout: none; /* iOS Safari */
-    -webkit-user-select: none; /* Safari */
-    -khtml-user-select: none; /* Konqueror HTML */
-    -moz-user-select: none; /* Old versions of Firefox */
-    -ms-user-select: none; /* Internet Explorer/Edge */
-    user-select: none; /* Non-prefixed version, currently supported by Chrome, Edge, Opera and Firefox */
+    user-select: none;
 }
 
 #footer {
@@ -288,8 +283,6 @@ input[type="text"] {
     outline-width: 0;
     color: white;
     border: 3px solid white;
-    -webkit-box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.1), 0 0 16px rgba(0, 0, 0, 0.1);
-    -moz-box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.1), 0 0 16px rgba(0, 0, 0, 0.1);
     box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.1), 0 0 16px rgba(0, 0, 0, 0.1);
     padding: 9px;
     background: rgba(0, 0, 0, 0.5);

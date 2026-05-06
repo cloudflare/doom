@@ -1,8 +1,8 @@
-import "~/index.css";
+import "~/styles.css";
 import ReactDOM from "react-dom/client";
 import { createBrowserRouter, RouterProvider, Outlet } from "react-router-dom";
 
-import { Game } from "./Game";
+import { Game } from "./components/Game";
 
 const NotFound = () => {
   return (

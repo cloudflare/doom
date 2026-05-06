@@ -158,6 +158,16 @@ if (DEFINED EMSCRIPTEN)
     #   INITIAL_MEMORY=64MB          - large enough to load typical IWADs
     #   ASYNCIFY=1                   - lets emscripten_sleep() / OPL_Delay()
     #                                  yield back to the browser event loop
+    #   EMULATE_FUNCTION_POINTER_CASTS=1
+    #                                - emit per-signature thunks so the Doom
+    #                                  actionf_t / think_t pattern (action.acp1
+    #                                  vs action.acp2 vs action.acv stored in
+    #                                  info.h state tables and called via a
+    #                                  single signature) doesn't trap with
+    #                                  "call_indirect to a signature that does
+    #                                  not match" on strict wasm engines
+    #                                  (Safari/JSC). V8/SpiderMonkey are lenient
+    #                                  about these UB casts; JSC is not.
     #   EXIT_RUNTIME=1               - flush stdout/stderr on quit
     #   ASSERTIONS=0                 - production sized
     #   STACK_OVERFLOW_CHECK=1       - guard band the stack
@@ -169,6 +179,6 @@ if (DEFINED EMSCRIPTEN)
     #                                  by net_websockets.c)
     #   -gsource-map / --source-map-base /  - emit a wasm sourcemap
     #   -O3                          - override the project-wide -O2 default
-    set(EM_LINK_FLAGS "${SDL_FLAGS} -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=64MB -s ASYNCIFY=1 -s EXIT_RUNTIME=1 -s ASSERTIONS=0 -s STACK_OVERFLOW_CHECK=1 -s ERROR_ON_UNDEFINED_SYMBOLS=0 -s FORCE_FILESYSTEM=1 -s EXPORTED_RUNTIME_METHODS=ccall,cwrap,FS,ENV,PATH,ERRNO_CODES,callMain -s EXPORTED_FUNCTIONS=_main -lwebsocket.js -O3 -gsource-map --source-map-base /")
+    set(EM_LINK_FLAGS "${SDL_FLAGS} -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=64MB -s ASYNCIFY=1 -s EMULATE_FUNCTION_POINTER_CASTS=1 -s EXIT_RUNTIME=1 -s ASSERTIONS=0 -s STACK_OVERFLOW_CHECK=1 -s ERROR_ON_UNDEFINED_SYMBOLS=0 -s FORCE_FILESYSTEM=1 -s EXPORTED_RUNTIME_METHODS=ccall,cwrap,FS,ENV,PATH,ERRNO_CODES,callMain -s EXPORTED_FUNCTIONS=_main -lwebsocket.js -O3 -gsource-map --source-map-base /")
     set_target_properties("${PROGRAM_PREFIX}doom" PROPERTIES LINK_FLAGS "${EM_LINK_FLAGS}")
 endif()

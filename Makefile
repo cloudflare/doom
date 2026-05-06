@@ -1,15 +1,31 @@
 #!/usr/bin/env make
-include .dev.vars
+-include .dev.vars
 export
 
 default:
 	@echo "Available Targets:"
 	@echo
+	@echo "  dev:        Run the Vite dev server (validates .dev.vars first)"
+	@echo "  env-check:  Verify .dev.vars exists"
 	@echo "  doom-build: Build Chocolate Doom (Emscripten/WASM) into doom/src/"
 	@echo "  doom-copy:  Copy chocolate-doom.* artifacts from doom/src/ into ./public"
 	@echo "  doom-clean: Remove doom/build and in-tree doom browser bundles"
 
-.PHONY: node_modules doom-build doom-clean doom-copy
+.PHONY: node_modules doom-build doom-clean doom-copy dev env-check
+
+# Verify that .dev.vars exists before running anything that needs local
+# environment variables (e.g. `make dev`). Prints a friendly, actionable
+# error pointing the user at .dev.vars.sample if the file is missing.
+env-check:
+	@if [ ! -f .dev.vars ]; then \
+		printf '\n\033[31mError:\033[0m .dev.vars not found.\n\nCreate one from .dev.vars.sample:\n\n  cp .dev.vars.sample .dev.vars\n\n' >&2; \
+		exit 1; \
+	fi
+
+# Run the Vite dev server. Validates .dev.vars first; npm run dev also
+# performs the same check via its `predev` script as defense in depth.
+dev: env-check
+	@npm run dev
 
 # Drives a CMake-based Emscripten build of Chocolate Doom 3.1.1 with the
 # WebSocket networking module and copies the resulting browser artifacts

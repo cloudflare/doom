@@ -7,213 +7,27 @@ import {
   type FC,
 } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-
-// ---------------------------------------------------------------------------
-// Globals exposed by CDN scripts in index.html and the side-effecting
-// emscripten bundle at /chocolate-doom.js (classic non-MODULARIZE build).
-//
-// The chocolate-doom.js script reads a pre-existing global `Module` for its
-// configuration and auto-runs as soon as it loads, so we set window.Module
-// before injecting the <script>. After init, the script attaches helpers
-// (FS, callMain, ...) onto that same object and exposes top-level vars on
-// window — most notably window.callMain.
-// ---------------------------------------------------------------------------
-
-type EmscriptenFS = {
-  createPreloadedFile: (
-    parent: string,
-    name: string,
-    url: string,
-    canRead: boolean,
-    canWrite: boolean,
-  ) => void;
-};
-
-type EmscriptenModuleConfig = {
-  arguments?: string[];
-  canvas?: HTMLCanvasElement;
-  noInitialRun?: boolean;
-  preRun?: () => void;
-  postRun?: () => void;
-  print?: (text: string) => void;
-  printErr?: (text: string) => void;
-  setStatus?: (text: string) => void;
-  monitorRunDependencies?: (left: number) => void;
-  onRuntimeInitialized?: () => void;
-  onAbort?: (reason: unknown) => void;
-  // Attached by the runtime before preRun fires.
-  FS?: EmscriptenFS;
-  callMain?: (args: string[]) => unknown;
-  calledRun?: boolean;
-};
-
-declare global {
-  interface Window {
-    Module?: EmscriptenModuleConfig;
-    callMain?: (args: string[]) => unknown;
-    ClipboardJS?: new (selector: string) => {
-      on: (event: "success" | "error", cb: () => void) => void;
-    };
-    nipplejs?: {
-      create: (opts: {
-        zone: HTMLElement;
-        color?: string;
-        mode?: "static" | "dynamic" | "semi";
-        identifier?: number;
-        position?: Record<string, string>;
-      }) => NippleJoystick;
-    };
-  }
-}
-
-type NippleJoystick = {
-  on: (
-    eventName: string,
-    cb: (
-      evt: { type: string },
-      data: {
-        direction?: { angle: "left" | "right" | "up" | "down" };
-        distance?: number;
-        angle?: { degree: number };
-      },
-    ) => void,
-  ) => NippleJoystick;
-  destroy?: () => void;
-};
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const ADJECTIVES = [
-  "Grumpy", "Ecstatic", "Surly", "Prepared", "Crafty", "Alert", "Sluggish",
-  "Testy", "Reluctant", "Languid", "Passive", "Pacifist", "Aggressive",
-  "Hostile", "Bubbly", "Giggly", "Laughing", "Crying", "Frowning", "Torpid",
-  "Lethargic", "Manic", "Patient", "Protective", "Philosophical", "Enquiring",
-  "Debating", "Furious", "Laid-Back", "Easy-Going", "Cromulent", "Excitable",
-  "Tired", "Exhausted", "Ruminating", "Redundant", "Sporty", "Ginger", "Scary",
-  "Posh", "Baby",
-];
-
-const NOUNS = [
-  "Frad", "Cacodemon", "Arch-Vile", "Cyberdemon", "Imp", "Demon", "Mancubus",
-  "Arachnotron", "Baron", "Knight", "Revenant", "Ettin", "Maulotaur",
-  "Centaur", "Afrit", "Serpent", "Disciple", "Gargoyle", "Golem", "Lich",
-  "Sentinel", "Acolyte", "Templar", "Reaver", "Spectre",
-];
-
-const COMMON_ARGS = [
-  "-iwad", "doom1.wad",
-  "-window",
-  "-nogui",
-  "-nomusic",
-  "-config", "default.cfg",
-  "-servername", "doomflare",
-  "-nodes", "4",
-];
-
-const ROOM_PATTERN = /^[a-z0-9]+-[a-z0-9]+$/;
-
-const ENDPOINTS = ((): { web: string; base: string; wsbase: string } => {
-  if (
-    typeof window !== "undefined" &&
-    window.location.hostname === "0.0.0.0"
-  ) {
-    return {
-      web: "http://0.0.0.0:8000",
-      base: "http://0.0.0.0:8000",
-      wsbase: "ws://0.0.0.0:8001",
-    };
-  }
-  return {
-    web: "https://silentspacemarine.com",
-    base: "https://router.silentspacemarine.com",
-    wsbase: "wss://router.silentspacemarine.com",
-  };
-})();
-
-// Virtual gamepad keycodes
-const KEY = {
-  left: 37,
-  right: 39,
-  down: 40,
-  up: 38,
-  speed: 16,
-  fire: 32,
-  use: 69,
-  enter: 13,
-  strafeLeft: 65,
-  strafeRight: 68,
-};
-
-const NE = [30, 60] as const;
-const NW = [120, 150] as const;
-const SW = [210, 240] as const;
-const SE = [300, 330] as const;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-const hasWebAssembly = (): boolean => {
-  try {
-    if (
-      typeof WebAssembly === "object" &&
-      typeof WebAssembly.instantiate === "function"
-    ) {
-      const bytes = Uint8Array.of(0, 0x61, 0x73, 0x6d, 0x01, 0, 0, 0);
-      const mod = new WebAssembly.Module(bytes);
-      if (mod instanceof WebAssembly.Module) {
-        return new WebAssembly.Instance(mod) instanceof WebAssembly.Instance;
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return false;
-};
-
-const isMobile = (): boolean => {
-  const tests = [
-    /Android/i,
-    /webOS/i,
-    /iPhone/i,
-    /iPad/i,
-    /iPod/i,
-    /BlackBerry/i,
-    /Windows Phone/i,
-  ];
-  return tests.some((re) => navigator.userAgent.match(re) !== null);
-};
-
-const isTouch = (): boolean =>
-  "ontouchstart" in window ||
-  navigator.maxTouchPoints > 0 ||
-  // legacy IE
-  (navigator as unknown as { msMaxTouchPoints?: number }).msMaxTouchPoints !==
-    undefined;
-
-const genPetName = (): string => {
-  const adj = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
-  const noun = NOUNS[Math.floor(Math.random() * NOUNS.length)];
-  return `${adj} ${noun}`;
-};
-
-const sendKey = (
-  canvas: HTMLCanvasElement,
-  keys: number[],
-  type: "keydown" | "keyup",
-): void => {
-  for (const key of keys) {
-    const ev = new Event(type, { bubbles: true }) as Event & {
-      keyCode: number;
-      which: number;
-    };
-    ev.keyCode = key;
-    ev.which = key;
-    canvas.dispatchEvent(ev);
-  }
-};
+import {
+  hasWebAssembly,
+  isMobile,
+  genPetName,
+  ENDPOINTS,
+  COMMON_ARGS,
+  ROOM_PATTERN,
+} from "../lib/game_tools";
+import { VirtualJoysticks } from "./VirtualJoysticks";
+import type {
+  ChoosePetMenuProps,
+  DeathmatchOrMenuProps,
+  DoomHooks,
+  EmscriptenModuleConfig,
+  HomeMenuProps,
+  MenuContentProps,
+  NoWasmViewProps,
+  PermalinkMenuProps,
+  Screen,
+  TextMenuProps,
+} from "../types";
 
 // Boot Chocolate Doom (classic Emscripten bundle).
 //
@@ -221,12 +35,6 @@ const sendKey = (
 // the pre-existing global `Module`. The script can only be initialised once
 // per page, so a second boot in the same session forces a hard reload — this
 // matches the original silentspacemarine.com behaviour.
-type DoomHooks = {
-  print?: (text: string) => void;
-  printErr?: (text: string) => void;
-  setStatus?: (text: string) => void;
-  onAbort?: (reason: unknown) => void;
-};
 
 let bootedOnce = false;
 
@@ -306,27 +114,6 @@ const bootDoom = (
 // State machine
 // ---------------------------------------------------------------------------
 
-type Screen =
-  | { kind: "noWasm" }
-  | { kind: "mobileInfo" }
-  | { kind: "home" }
-  | { kind: "validating" }
-  | { kind: "invalid" }
-  | { kind: "tooLate" }
-  | {
-      kind: "choosePet";
-      mode: "host" | "join";
-      // For "join", we already know the room.
-      room?: string;
-    }
-  | { kind: "deathmatchOr"; pet: string; room: string }
-  | {
-      kind: "permalink";
-      room: string;
-      args: string[];
-    }
-  | { kind: "game"; args: string[] };
-
 const initialScreen = (pathname: string): Screen => {
   if (!hasWebAssembly()) return { kind: "noWasm" };
   if (isMobile()) return { kind: "mobileInfo" };
@@ -345,8 +132,6 @@ export const Game: FC = () => {
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const footerRef = useRef<HTMLDivElement>(null);
-  const joy1Ref = useRef<HTMLDivElement>(null);
-  const joy2Ref = useRef<HTMLDivElement>(null);
 
   const [screen, setScreen] = useState<Screen>(() =>
     initialScreen(location.pathname),
@@ -459,139 +244,6 @@ export const Game: FC = () => {
     document.addEventListener("gesturestart", stopGesture);
     return () => document.removeEventListener("gesturestart", stopGesture);
   }, []);
-
-  // -----------------------------------------------------------------------
-  // Virtual gamepads (nipplejs) - only mount once we are in the game and on
-  // a touch device.
-  // -----------------------------------------------------------------------
-  useEffect(() => {
-    if (screen.kind !== "game") return;
-    if (!isTouch()) return;
-    const nipple = window.nipplejs;
-    if (!nipple) return;
-    const left = joy1Ref.current;
-    const right = joy2Ref.current;
-    const canvas = canvasRef.current;
-    if (!left || !right || !canvas) return;
-
-    const leftJoy = nipple.create({
-      zone: left,
-      color: "#7d2300",
-      mode: "static",
-      identifier: 1,
-      position: { bottom: "50%", left: "50%" },
-    });
-    const rightJoy = nipple.create({
-      zone: right,
-      color: "#7d2300",
-      mode: "static",
-      identifier: 2,
-      position: { bottom: "50%", right: "50%" },
-    });
-
-    leftJoy
-      .on("start end", (evt) => {
-        if (evt.type === "end") {
-          sendKey(
-            canvas,
-            [KEY.left, KEY.right, KEY.down, KEY.up, KEY.speed],
-            "keyup",
-          );
-        }
-      })
-      .on("move", (_evt, data) => {
-        if (!data.direction) return;
-        if ((data.distance ?? 0) > 20) {
-          let pl = false;
-          let pr = false;
-          let pd = false;
-          let pu = false;
-          const deg = data.angle?.degree ?? -1;
-          switch (data.direction.angle) {
-            case "left":
-              pl = true;
-              if (deg >= NW[0] && deg <= NW[1]) pu = true;
-              if (deg >= SW[0] && deg <= SW[1]) pd = true;
-              break;
-            case "right":
-              pr = true;
-              if (deg >= NE[0] && deg <= NE[1]) pu = true;
-              if (deg >= SE[0] && deg <= SE[1]) pd = true;
-              break;
-            case "up":
-              pu = true;
-              if (deg >= NW[0] && deg <= NW[1]) pl = true;
-              if (deg >= NE[0] && deg <= NE[1]) pr = true;
-              break;
-            case "down":
-              pd = true;
-              if (deg >= SW[0] && deg <= SW[1]) pl = true;
-              if (deg >= SE[0] && deg <= SE[1]) pr = true;
-              break;
-          }
-          sendKey(canvas, [KEY.left], pl ? "keydown" : "keyup");
-          sendKey(canvas, [KEY.right], pr ? "keydown" : "keyup");
-          sendKey(canvas, [KEY.down], pd ? "keydown" : "keyup");
-          sendKey(canvas, [KEY.up], pu ? "keydown" : "keyup");
-        } else {
-          sendKey(
-            canvas,
-            [KEY.left, KEY.right, KEY.down, KEY.up, KEY.speed],
-            "keyup",
-          );
-        }
-      });
-
-    rightJoy
-      .on("start end", (evt) => {
-        if (evt.type === "end") {
-          sendKey(
-            canvas,
-            [
-              KEY.strafeLeft,
-              KEY.strafeRight,
-              KEY.fire,
-              KEY.use,
-              KEY.enter,
-            ],
-            "keyup",
-          );
-        }
-      })
-      .on("move", (_evt, data) => {
-        if (!data.direction) {
-          sendKey(canvas, [KEY.fire, KEY.enter], "keydown");
-          return;
-        }
-        if ((data.distance ?? 0) > 20) {
-          switch (data.direction.angle) {
-            case "left":
-              sendKey(canvas, [KEY.strafeLeft], "keydown");
-              sendKey(canvas, [KEY.fire, KEY.enter], "keyup");
-              break;
-            case "right":
-              sendKey(canvas, [KEY.strafeRight], "keydown");
-              sendKey(canvas, [KEY.fire, KEY.enter], "keyup");
-              break;
-            case "up":
-              sendKey(canvas, [KEY.use], "keydown");
-              sendKey(canvas, [KEY.fire, KEY.enter], "keyup");
-              break;
-            case "down":
-              sendKey(canvas, [KEY.fire, KEY.enter], "keyup");
-              break;
-          }
-        } else {
-          sendKey(canvas, [KEY.fire, KEY.enter], "keydown");
-          sendKey(canvas, [KEY.strafeLeft, KEY.strafeRight, KEY.use], "keyup");
-        }
-      });
-
-    return () => {
-      leftJoy.destroy?.();
-      rightJoy.destroy?.();
-    };
-  }, [screen.kind]);
 
   // -----------------------------------------------------------------------
   // Boot the WASM module when entering the "game" screen.
@@ -754,21 +406,6 @@ export const Game: FC = () => {
   );
 
   // -----------------------------------------------------------------------
-  // ClipboardJS for "Copy Permalink" - bind once a permalink screen mounts.
-  // -----------------------------------------------------------------------
-  useEffect(() => {
-    if (screen.kind !== "permalink") return;
-    if (!window.ClipboardJS) return;
-    const clip = new window.ClipboardJS(".perma");
-    return () => {
-      // ClipboardJS instances expose a destroy() method; cast safely.
-      (
-        clip as unknown as { destroy?: () => void }
-      ).destroy?.();
-    };
-  }, [screen.kind]);
-
-  // -----------------------------------------------------------------------
   // Render
   // -----------------------------------------------------------------------
 
@@ -793,8 +430,7 @@ export const Game: FC = () => {
             <img src="hidetoolbar.png" alt="hide toolbar" />
           </div>
         </div>
-        <div id="joystick1" ref={joy1Ref} />
-        <div id="joystick2" ref={joy2Ref} />
+        <VirtualJoysticks canvasRef={canvasRef} active={false} />
       </>
     );
   }
@@ -862,8 +498,7 @@ export const Game: FC = () => {
           />
         </div>
       </div>
-      <div id="joystick1" ref={joy1Ref} />
-      <div id="joystick2" ref={joy2Ref} />
+      <VirtualJoysticks canvasRef={canvasRef} active={screen.kind === "game"} />
     </>
   );
 };
@@ -872,10 +507,7 @@ export const Game: FC = () => {
 // Sub-components
 // ---------------------------------------------------------------------------
 
-const NoWasmView: FC<{
-  footerRef: React.RefObject<HTMLDivElement | null>;
-  footerHtml: string;
-}> = ({ footerRef, footerHtml }) => (
+const NoWasmView: FC<NoWasmViewProps> = ({ footerRef, footerHtml }) => (
   <div id="container">
     <div id="monitor" style={{ display: "block" }}>
       <div id="monitorscreen">
@@ -898,17 +530,6 @@ const NoWasmView: FC<{
     </div>
   </div>
 );
-
-type MenuContentProps = {
-  screen: Screen;
-  petName: string;
-  setPetName: (v: string) => void;
-  onSolo: () => void;
-  onMultiplayer: () => void;
-  onChoosePetSubmit?: (pet: string) => void;
-  onDeathmatchChoice?: (deathmatch: boolean) => void;
-  onPermalinkStart?: () => void;
-};
 
 const MenuContent: FC<MenuContentProps> = ({
   screen,
@@ -955,10 +576,7 @@ const MenuContent: FC<MenuContentProps> = ({
 
 // ---------- individual menus ----------
 
-const HomeMenu: FC<{ onSolo: () => void; onMultiplayer: () => void }> = ({
-  onSolo,
-  onMultiplayer,
-}) => {
+const HomeMenu: FC<HomeMenuProps> = ({ onSolo, onMultiplayer }) => {
   const [pressed, setPressed] = useState<"solo" | "multiplayer" | null>(null);
   const click = (which: "solo" | "multiplayer", fn: () => void) => () => {
     setPressed(which);
@@ -1029,9 +647,7 @@ const HomeMenu: FC<{ onSolo: () => void; onMultiplayer: () => void }> = ({
   );
 };
 
-const TextMenu: FC<{
-  screen: Extract<Screen, { kind: "validating" | "tooLate" | "invalid" }>;
-}> = ({ screen }) => {
+const TextMenu: FC<TextMenuProps> = ({ screen }) => {
   if (screen.kind === "validating") {
     return (
       <div id="text">
@@ -1054,11 +670,11 @@ const TextMenu: FC<{
   );
 };
 
-const ChoosePetMenu: FC<{
-  petName: string;
-  setPetName: (v: string) => void;
-  onSubmit: (pet: string) => void;
-}> = ({ petName, setPetName, onSubmit }) => {
+const ChoosePetMenu: FC<ChoosePetMenuProps> = ({
+  petName,
+  setPetName,
+  onSubmit,
+}) => {
   const [pressed, setPressed] = useState<"random" | "go" | null>(null);
   const click = (which: "random" | "go", fn: () => void) => () => {
     setPressed(which);
@@ -1096,9 +712,7 @@ const ChoosePetMenu: FC<{
           className={`btn ${goClass}`}
           id="mypet"
           onClick={
-            petName.length
-              ? click("go", () => onSubmit(petName))
-              : undefined
+            petName.length ? click("go", () => onSubmit(petName)) : undefined
           }
         >
           Go
@@ -1108,9 +722,7 @@ const ChoosePetMenu: FC<{
   );
 };
 
-const DeathmatchOrMenu: FC<{ onChoice: (dm: boolean) => void }> = ({
-  onChoice,
-}) => {
+const DeathmatchOrMenu: FC<DeathmatchOrMenuProps> = ({ onChoice }) => {
   const [pressed, setPressed] = useState<"dm" | "co" | null>(null);
   const click = (which: "dm" | "co", fn: () => void) => () => {
     setPressed(which);
@@ -1140,10 +752,7 @@ const DeathmatchOrMenu: FC<{ onChoice: (dm: boolean) => void }> = ({
   );
 };
 
-const PermalinkMenu: FC<{ room: string; onStart: () => void }> = ({
-  room,
-  onStart,
-}) => {
+const PermalinkMenu: FC<PermalinkMenuProps> = ({ room, onStart }) => {
   const [pressed, setPressed] = useState<"clip" | "start" | null>(null);
   const click = (which: "clip" | "start", fn: () => void) => () => {
     setPressed(which);
@@ -1154,28 +763,28 @@ const PermalinkMenu: FC<{ room: string; onStart: () => void }> = ({
   };
   const permalink = `${ENDPOINTS.web}/${room}`;
   const display = `${ENDPOINTS.web}/${room.slice(0, 8)}...${room.slice(-8)}`;
+  const copyPermalink = () => {
+    void navigator.clipboard?.writeText(permalink).catch((err) => {
+      console.error("Failed to copy permalink:", err);
+    });
+  };
   return (
     <div id="text">
       <h1 className="vspace">Doom Multiplayer is about to start</h1>
       <h1 className="vspace">Share this permalink with your friends:</h1>
       <h1>
-        <a className="perma h" data-clipboard-text={permalink}>
-          {display}
-        </a>
+        <a className="h">{display}</a>
       </h1>
-      <h1 className="vspace">
-        Your friends can join until you start the game
-      </h1>
+      <h1 className="vspace">Your friends can join until you start the game</h1>
       <h1>Move to next the screen, wait for them, and</h1>
       <h1>then hit space to start the game</h1>
       <h1 />
       <div className="vspace">
         <a
           id="clip"
-          className={`btn ${pressed === "clip" ? "grey" : "tertiary"} perma`}
-          data-clipboard-text={permalink}
+          className={`btn ${pressed === "clip" ? "grey" : "tertiary"}`}
           data-room={room}
-          onClick={click("clip", () => undefined)}
+          onClick={click("clip", copyPermalink)}
         >
           Copy Permalink
         </a>
