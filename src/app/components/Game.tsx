@@ -11,188 +11,72 @@ import {
   hasWebAssembly,
   isMobile,
   genPetName,
+  bootDoom,
   ENDPOINTS,
   COMMON_ARGS,
   ROOM_PATTERN,
 } from "../lib/game_tools";
 import { VirtualJoysticks } from "./VirtualJoysticks";
+import {
+  GameFooter,
+  useDoomPrintHandler,
+  type GameFooterHandle,
+  type Typewriter,
+} from "./GameFooter";
+import { NoWasmView, Logo } from "./Helpers";
+import QRCode from "react-qr-code";
 import type {
   ChoosePetMenuProps,
   DeathmatchOrMenuProps,
-  DoomHooks,
-  EmscriptenModuleConfig,
   HomeMenuProps,
   MenuContentProps,
-  NoWasmViewProps,
   PermalinkMenuProps,
   Screen,
   TextMenuProps,
 } from "../types";
-
-// Boot Chocolate Doom (classic Emscripten bundle).
-//
-// The /chocolate-doom.js script auto-runs on load and reads its config from
-// the pre-existing global `Module`. The script can only be initialised once
-// per page, so a second boot in the same session forces a hard reload — this
-// matches the original silentspacemarine.com behaviour.
-
-let bootedOnce = false;
-
-const bootDoom = (
-  args: string[],
-  canvas: HTMLCanvasElement,
-  hooks: DoomHooks,
-): Promise<void> => {
-  if (bootedOnce) {
-    // The classic Emscripten bundle has already auto-run; we cannot
-    // re-initialise it. Force a fresh page so the user can start over.
-    window.location.reload();
-    return new Promise<void>(() => {
-      /* never resolves; reload is in flight */
-    });
-  }
-  bootedOnce = true;
-
-  return new Promise<void>((resolve, reject) => {
-    const config: EmscriptenModuleConfig = {
-      canvas,
-      arguments: args,
-      noInitialRun: true,
-      preRun: () => {
-        const fs = window.Module?.FS;
-        if (!fs) {
-          console.error(
-            "Doom preRun: FS not attached yet - cannot preload WAD",
-          );
-          return;
-        }
-        fs.createPreloadedFile("", "doom1.wad", "doom1.wad", true, true);
-        fs.createPreloadedFile("", "default.cfg", "default.cfg", true, true);
-      },
-      onRuntimeInitialized: () => {
-        // Mirror the reference index.html: explicit callMain after init.
-        const main = window.Module?.callMain ?? window.callMain;
-        if (typeof main !== "function") {
-          reject(new Error("callMain not exposed by chocolate-doom.js"));
-          return;
-        }
-        try {
-          main(args);
-          resolve();
-        } catch (err) {
-          reject(err);
-        }
-      },
-      print: hooks.print,
-      printErr: hooks.printErr,
-      setStatus: hooks.setStatus,
-      monitorRunDependencies: () => {
-        /* status handled by setStatus */
-      },
-      onAbort: (reason) => {
-        hooks.onAbort?.(reason);
-        reject(
-          reason instanceof Error
-            ? reason
-            : new Error(`Doom aborted: ${String(reason)}`),
-        );
-      },
-    };
-
-    window.Module = config;
-
-    const script = document.createElement("script");
-    script.src = "/chocolate-doom.js";
-    script.async = true;
-    script.onerror = () =>
-      reject(new Error("Failed to load /chocolate-doom.js"));
-    document.head.appendChild(script);
-  });
-};
-
-// ---------------------------------------------------------------------------
-// State machine
-// ---------------------------------------------------------------------------
-
-const initialScreen = (pathname: string): Screen => {
-  if (!hasWebAssembly()) return { kind: "noWasm" };
-  if (isMobile()) return { kind: "mobileInfo" };
-  const path = pathname.replace(/^\//, "");
-  if (ROOM_PATTERN.test(path)) return { kind: "validating" };
-  return { kind: "home" };
-};
-
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
 
 export const Game: FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const footerRef = useRef<HTMLDivElement>(null);
+  const footerRef = useRef<GameFooterHandle>(null);
 
-  const [screen, setScreen] = useState<Screen>(() =>
-    initialScreen(location.pathname),
-  );
+  const [screen, setScreen] = useState<Screen>(() => {
+    if (!hasWebAssembly()) return { view: "noWasm" };
+    if (isMobile()) return { view: "mobileInfo" };
+    if (ROOM_PATTERN.test(location.pathname.replace(/^\//, "")))
+      return { view: "validating" };
+    return { view: "home" };
+  });
   const [petName, setPetName] = useState<string>(() => genPetName());
-  // Footer typewriter state
-  const [footerMessages, setFooterMessages] = useState<string[]>([]);
-  const [footerIndex, setFooterIndex] = useState<number>(0);
 
   const room = useMemo(
     () => location.pathname.replace(/^\//, ""),
     [location.pathname],
   );
 
-  // -----------------------------------------------------------------------
-  // typewriter() replacement: cycles through messages every 10s on the footer.
-  // -----------------------------------------------------------------------
-  const typewriter = useCallback((msg: string | string[]) => {
-    const arr = Array.isArray(msg) ? msg : [msg];
-    setFooterMessages(arr);
-    setFooterIndex(0);
+  // Stable proxy that forwards messages to <GameFooter>'s imperative API.
+  // The footer owns its own message/cycling/animation state internally.
+  const typewriter = useCallback<Typewriter>((msg) => {
+    footerRef.current?.typewriter(msg);
   }, []);
 
-  // Cycle through footerMessages.
-  useEffect(() => {
-    if (footerMessages.length <= 1) return;
-    const t = window.setTimeout(() => {
-      setFooterIndex((i) => (i + 1) % footerMessages.length);
-    }, 10000);
-    return () => window.clearTimeout(t);
-  }, [footerMessages, footerIndex]);
-
-  // Restart the CSS "writer" animation on each footer update.
-  useEffect(() => {
-    const f = footerRef.current;
-    if (!f) return;
-    f.classList.remove("writer");
-    // force reflow so the animation restarts
-    void f.offsetWidth;
-    f.classList.add("writer");
-  }, [footerMessages, footerIndex]);
-
-  // -----------------------------------------------------------------------
   // Mobile info screen: show for 5 seconds, then route based on URL.
-  // -----------------------------------------------------------------------
   useEffect(() => {
-    if (screen.kind !== "mobileInfo") return;
+    if (screen.view !== "mobileInfo") return;
     const t = window.setTimeout(() => {
       const path = location.pathname.replace(/^\//, "");
       setScreen(
-        ROOM_PATTERN.test(path) ? { kind: "validating" } : { kind: "home" },
+        ROOM_PATTERN.test(path) ? { view: "validating" } : { view: "home" },
       );
     }, 5000);
     return () => window.clearTimeout(t);
-  }, [screen.kind, location.pathname]);
+  }, [screen.view, location.pathname]);
 
-  // -----------------------------------------------------------------------
   // Validate room when entering a multiplayer URL.
-  // -----------------------------------------------------------------------
   useEffect(() => {
-    if (screen.kind !== "validating") return;
+    if (screen.view !== "validating") return;
     typewriter('<h1 class="vspace">Validating room...</h1>');
     let cancelled = false;
     void fetch(`${ENDPOINTS.base}/api/room/${room}`)
@@ -200,56 +84,55 @@ export const Game: FC = () => {
       .then((data: { room?: string; gameStarted?: boolean }) => {
         if (cancelled) return;
         if (!data.room) {
-          setScreen({ kind: "invalid" });
+          setScreen({ view: "invalid" });
           return;
         }
         if (data.gameStarted) {
-          setScreen({ kind: "tooLate" });
+          setScreen({ view: "tooLate" });
           return;
         }
         // Small delay to mimic the previous setTimeout(... 3000).
         window.setTimeout(() => {
           if (cancelled) return;
-          setScreen({ kind: "choosePet", mode: "join", room });
+          setScreen({ view: "choosePet", mode: "join", room });
         }, 3000);
       })
       .catch(() => {
-        if (!cancelled) setScreen({ kind: "invalid" });
+        if (!cancelled) setScreen({ view: "invalid" });
       });
     return () => {
       cancelled = true;
     };
-  }, [screen.kind, room, typewriter]);
+  }, [screen.view, room, typewriter]);
 
-  // -----------------------------------------------------------------------
   // Auto-redirects for terminal info screens.
-  // -----------------------------------------------------------------------
   useEffect(() => {
-    if (screen.kind === "invalid") {
+    if (screen.view === "invalid") {
       const t = window.setTimeout(() => navigate("/", { replace: true }), 3000);
       return () => window.clearTimeout(t);
     }
-    if (screen.kind === "tooLate") {
+    if (screen.view === "tooLate") {
       const t = window.setTimeout(() => navigate("/", { replace: true }), 7000);
       return () => window.clearTimeout(t);
     }
     return undefined;
-  }, [screen.kind, navigate]);
+  }, [screen.view, navigate]);
 
-  // -----------------------------------------------------------------------
   // Disable pinch-to-zoom on iOS (matches the original `gesturestart` hack).
-  // -----------------------------------------------------------------------
   useEffect(() => {
     const stopGesture = (e: Event) => e.preventDefault();
     document.addEventListener("gesturestart", stopGesture);
     return () => document.removeEventListener("gesturestart", stopGesture);
   }, []);
 
-  // -----------------------------------------------------------------------
+  // chocolate-doom's `print` callback. The doom-specific message decoding
+  // lives alongside <GameFooter> in ./GameFooter so this component stays
+  // focused on screen routing.
+  const handlePrint = useDoomPrintHandler(typewriter, room, navigate);
+
   // Boot the WASM module when entering the "game" screen.
-  // -----------------------------------------------------------------------
   useEffect(() => {
-    if (screen.kind !== "game") return;
+    if (screen.view !== "game") return;
     const canvas = canvasRef.current;
     if (!canvas) return;
 
@@ -259,61 +142,7 @@ export const Game: FC = () => {
     };
     canvas.addEventListener("webglcontextlost", onContextLost, false);
 
-    const handlePrint = (text: string) => {
-      if (text.startsWith("doom: ")) {
-        const [idStr, rawMsg] = text.slice(6).split(",");
-        const id = Number.parseInt(idStr ?? "", 10);
-        let msg: string | string[] | false = rawMsg ?? "";
-        switch (id) {
-          case 2:
-            msg = [
-              "Connected to Cloudflare WebSockets. Waiting for other players",
-              "Still here, waiting for the host to start the game",
-            ];
-            break;
-          case 9:
-            window.setTimeout(() => navigate("/", { replace: true }), 5000);
-            break;
-          case 10:
-            msg = false;
-            typewriter([
-              "MOVE = MOUSE, WSOP OR ARROWS, SHIFT = RUN, E = USE, AD = STRAFE (OR HOLD C)",
-              "TAB = MAP, T = SAY, F = FULLSCREEN, LEFT MOUSE OR SPACE = FIRE",
-            ]);
-            if (room) {
-              void fetch(`${ENDPOINTS.base}/api/room/${room}/started`)
-                .then((r) => r.json())
-                .then((data: unknown) => {
-                  console.log(data);
-                  console.log(`router notified that ${room} has started`);
-                });
-            }
-            break;
-          case 5:
-          case 8:
-            msg = false;
-            break;
-          default:
-            msg = (rawMsg ?? "").trim();
-            break;
-        }
-        if (msg) typewriter(msg);
-      }
-      console.log(text);
-    };
-
-    void bootDoom(screen.args, canvas, {
-      print: handlePrint,
-      printErr: (text) => {
-        console.error(text);
-      },
-      setStatus: (text) => {
-        console.log(text);
-      },
-      onAbort: (reason) => {
-        console.error("Doom aborted:", reason);
-      },
-    }).catch((err) => {
+    void bootDoom(screen.args, canvas, handlePrint).catch((err) => {
       console.error(err);
     });
 
@@ -321,35 +150,27 @@ export const Game: FC = () => {
       canvas.removeEventListener("webglcontextlost", onContextLost, false);
     };
     // We deliberately depend on screen reference; args are stable per game.
-  }, [screen, navigate, room, typewriter]);
+  }, [screen, handlePrint]);
 
-  // -----------------------------------------------------------------------
   // Screen-specific transitions
-  // -----------------------------------------------------------------------
-
   const startSolo = useCallback(() => {
     typewriter([
       "W,A,S,D OR ARROWS TO MOVE, Q,E,Z|O TO STRAFE, X|P FOR SPEED, C TO OPEN",
       "TAB SHOWS THE MAP, T TO WRITE (MULTIPLAYER), YOU CAN ALSO USE THE MOUSE",
     ]);
-    // -warp 1 1 sets autostart=true and lands directly in E1M1, bypassing
-    // D_StartTitle's demo-loop. Demo playback in this WASM build crashes in
-    // P_PlayerThink (NULL `mo` deref via `subsector->sector`), so we skip
-    // the title cycle for solo. Multiplayer doesn't hit this path because
-    // -server/-connect implicitly set netgame=true → G_InitNew.
-    setScreen({ kind: "game", args: [...COMMON_ARGS] });
+    setScreen({ view: "game", args: [...COMMON_ARGS] });
   }, [typewriter]);
 
   const startMultiplayer = useCallback(() => {
     void fetch(`${ENDPOINTS.base}/api/newroom`)
       .then((r) => r.json())
       .then((data: { room: string }) => {
-        setScreen({ kind: "choosePet", mode: "host", room: data.room });
+        setScreen({ view: "choosePet", mode: "host", room: data.room });
       });
   }, []);
 
   const onChoosePetSubmit = useCallback(
-    (s: Screen & { kind: "choosePet" }) => (pet: string) => {
+    (s: Screen & { view: "choosePet" }) => (pet: string) => {
       const trimmed = pet.trim();
       if (!trimmed) return;
       if (s.mode === "join" && s.room) {
@@ -368,29 +189,29 @@ export const Game: FC = () => {
           "Connecting to master server. Please wait.",
           "Still trying. Is the master server for this room running?",
         ]);
-        setScreen({ kind: "game", args });
+        setScreen({ view: "game", args });
       } else if (s.mode === "host" && s.room) {
-        setScreen({ kind: "deathmatchOr", pet: trimmed, room: s.room });
+        setScreen({ view: "deathmatchOr", pet: trimmed, room: s.room });
       }
     },
     [typewriter],
   );
 
   const onDeathmatchChoice = useCallback(
-    (s: Screen & { kind: "deathmatchOr" }) => (deathmatch: boolean) => {
+    (s: Screen & { view: "deathmatchOr" }) => (deathmatch: boolean) => {
       const args = [
         ...COMMON_ARGS,
         "-pet",
         s.pet,
         ...(deathmatch ? ["-deathmatch"] : []),
       ];
-      setScreen({ kind: "permalink", room: s.room, args });
+      setScreen({ view: "permalink", room: s.room, args });
     },
     [],
   );
 
   const onPermalinkStart = useCallback(
-    (s: Screen & { kind: "permalink" }) => () => {
+    (s: Screen & { view: "permalink" }) => () => {
       const args = [
         ...s.args,
         "-server",
@@ -400,25 +221,16 @@ export const Game: FC = () => {
         "-wss",
         `${ENDPOINTS.wsbase}/api/ws/${s.room}`,
       ];
-      setScreen({ kind: "game", args });
+      setScreen({ view: "game", args });
     },
     [],
   );
 
-  // -----------------------------------------------------------------------
-  // Render
-  // -----------------------------------------------------------------------
-
-  if (screen.kind === "noWasm") {
-    return (
-      <NoWasmView
-        footerRef={footerRef}
-        footerHtml={footerMessages[footerIndex] ?? ""}
-      />
-    );
+  if (screen.view === "noWasm") {
+    return <NoWasmView />;
   }
 
-  if (screen.kind === "mobileInfo") {
+  if (screen.view === "mobileInfo") {
     return (
       <>
         <div id="container">
@@ -435,15 +247,6 @@ export const Game: FC = () => {
     );
   }
 
-  const showLogo =
-    screen.kind === "home" ||
-    screen.kind === "validating" ||
-    screen.kind === "tooLate" ||
-    screen.kind === "choosePet" ||
-    screen.kind === "deathmatchOr";
-  const showCanvas = screen.kind === "game";
-  const showMenu = !showCanvas;
-
   return (
     <>
       <div id="container">
@@ -454,15 +257,11 @@ export const Game: FC = () => {
               ref={canvasRef}
               onContextMenu={(e) => e.preventDefault()}
               tabIndex={-1}
-              style={{ display: showCanvas ? "" : "none" }}
+              style={{ display: screen.view === "game" ? "" : "none" }}
             />
-            {showMenu && (
+            {screen.view !== "game" && (
               <div id="menu">
-                <div
-                  id="logo"
-                  className="vspace"
-                  style={{ display: showLogo ? "" : "none" }}
-                />
+                <Logo screen={screen} />
                 <MenuContent
                   screen={screen}
                   petName={petName}
@@ -470,17 +269,17 @@ export const Game: FC = () => {
                   onSolo={startSolo}
                   onMultiplayer={startMultiplayer}
                   onChoosePetSubmit={
-                    screen.kind === "choosePet"
+                    screen.view === "choosePet"
                       ? onChoosePetSubmit(screen)
                       : undefined
                   }
                   onDeathmatchChoice={
-                    screen.kind === "deathmatchOr"
+                    screen.view === "deathmatchOr"
                       ? onDeathmatchChoice(screen)
                       : undefined
                   }
                   onPermalinkStart={
-                    screen.kind === "permalink"
+                    screen.view === "permalink"
                       ? onPermalinkStart(screen)
                       : undefined
                   }
@@ -488,48 +287,13 @@ export const Game: FC = () => {
               </div>
             )}
           </div>
-          <div
-            id="footer"
-            ref={footerRef}
-            className="writer"
-            dangerouslySetInnerHTML={{
-              __html: footerMessages[footerIndex] ?? "",
-            }}
-          />
+          <GameFooter ref={footerRef} />
         </div>
       </div>
-      <VirtualJoysticks canvasRef={canvasRef} active={screen.kind === "game"} />
+      <VirtualJoysticks canvasRef={canvasRef} active={screen.view === "game"} />
     </>
   );
 };
-
-// ---------------------------------------------------------------------------
-// Sub-components
-// ---------------------------------------------------------------------------
-
-const NoWasmView: FC<NoWasmViewProps> = ({ footerRef, footerHtml }) => (
-  <div id="container">
-    <div id="monitor" style={{ display: "block" }}>
-      <div id="monitorscreen">
-        <div id="menu">
-          <div id="logo" className="vspace" />
-          <div id="text">
-            <h1 className="vspace">Your browser has no WebAssembly Support</h1>
-            <h1 className="vspace">
-              You need a modern browser to run this demo
-            </h1>
-          </div>
-        </div>
-      </div>
-      <div
-        id="footer"
-        ref={footerRef}
-        className="writer"
-        dangerouslySetInnerHTML={{ __html: footerHtml }}
-      />
-    </div>
-  </div>
-);
 
 const MenuContent: FC<MenuContentProps> = ({
   screen,
@@ -541,7 +305,7 @@ const MenuContent: FC<MenuContentProps> = ({
   onDeathmatchChoice,
   onPermalinkStart,
 }) => {
-  switch (screen.kind) {
+  switch (screen.view) {
     case "home":
       return <HomeMenu onSolo={onSolo} onMultiplayer={onMultiplayer} />;
     case "validating":
@@ -573,8 +337,6 @@ const MenuContent: FC<MenuContentProps> = ({
       return null;
   }
 };
-
-// ---------- individual menus ----------
 
 const HomeMenu: FC<HomeMenuProps> = ({ onSolo, onMultiplayer }) => {
   const [pressed, setPressed] = useState<"solo" | "multiplayer" | null>(null);
@@ -648,14 +410,14 @@ const HomeMenu: FC<HomeMenuProps> = ({ onSolo, onMultiplayer }) => {
 };
 
 const TextMenu: FC<TextMenuProps> = ({ screen }) => {
-  if (screen.kind === "validating") {
+  if (screen.view === "validating") {
     return (
       <div id="text">
         <h1 className="vspace">Validating room...</h1>
       </div>
     );
   }
-  if (screen.kind === "tooLate") {
+  if (screen.view === "tooLate") {
     return (
       <div id="text">
         <h1 className="vspace">Too late, this game has already started ;(</h1>
@@ -754,6 +516,7 @@ const DeathmatchOrMenu: FC<DeathmatchOrMenuProps> = ({ onChoice }) => {
 
 const PermalinkMenu: FC<PermalinkMenuProps> = ({ room, onStart }) => {
   const [pressed, setPressed] = useState<"clip" | "start" | null>(null);
+  const [qr, setQr] = useState(false);
   const click = (which: "clip" | "start", fn: () => void) => () => {
     setPressed(which);
     window.setTimeout(() => {
@@ -770,11 +533,17 @@ const PermalinkMenu: FC<PermalinkMenuProps> = ({ room, onStart }) => {
   };
   return (
     <div id="text">
-      <h1 className="vspace">Doom Multiplayer is about to start</h1>
-      <h1 className="vspace">Share this permalink with your friends:</h1>
-      <h1>
-        <a className="h">{display}</a>
-      </h1>
+      {!qr ? (
+        <>
+          <h1 className="vspace">Doom Multiplayer is about to start</h1>
+          <h1 className="vspace">Share this permalink with your friends:</h1>
+          <h1>
+            <a className="h">{display}</a>
+          </h1>
+        </>
+      ) : (
+        <QRCode value={permalink} />
+      )}
       <h1 className="vspace">Your friends can join until you start the game</h1>
       <h1>Move to next the screen, wait for them, and</h1>
       <h1>then hit space to start the game</h1>
@@ -782,11 +551,21 @@ const PermalinkMenu: FC<PermalinkMenuProps> = ({ room, onStart }) => {
       <div className="vspace">
         <a
           id="clip"
-          className={`btn ${pressed === "clip" ? "grey" : "tertiary"}`}
+          className={`btn ${pressed === "clip" ? "grey" : "primary"}`}
           data-room={room}
           onClick={click("clip", copyPermalink)}
         >
           Copy Permalink
+        </a>
+        <a
+          id="clip"
+          className={`btn ${pressed === "clip" ? "grey" : "tertiary"}`}
+          data-room={room}
+          onClick={() => {
+            setQr(!qr);
+          }}
+        >
+          {qr ? `Hide QR Code` : `Show QR Code`}{" "}
         </a>
         <a
           className={`btn ${pressed === "start" ? "grey" : "secondary"}`}

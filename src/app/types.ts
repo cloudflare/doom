@@ -35,14 +35,6 @@ export type EmscriptenModuleConfig = {
   calledRun?: boolean;
 };
 
-// Hook subset the Game component supplies to bootDoom().
-export type DoomHooks = {
-  print?: (text: string) => void;
-  printErr?: (text: string) => void;
-  setStatus?: (text: string) => void;
-  onAbort?: (reason: unknown) => void;
-};
-
 // ---------------------------------------------------------------------------
 // nipplejs (loaded as a CDN <script> in index.html — exposed as a global
 // on window). Typing kept intentionally minimal: only the surface our
@@ -105,25 +97,25 @@ export type Endpoints = {
 // ---------------------------------------------------------------------------
 
 export type Screen =
-  | { kind: "noWasm" }
-  | { kind: "mobileInfo" }
-  | { kind: "home" }
-  | { kind: "validating" }
-  | { kind: "invalid" }
-  | { kind: "tooLate" }
+  | { view: "noWasm" }
+  | { view: "mobileInfo" }
+  | { view: "home" }
+  | { view: "validating" }
+  | { view: "invalid" }
+  | { view: "tooLate" }
   | {
-      kind: "choosePet";
+      view: "choosePet";
       mode: "host" | "join";
       // For "join", we already know the room.
       room?: string;
     }
-  | { kind: "deathmatchOr"; pet: string; room: string }
+  | { view: "deathmatchOr"; pet: string; room: string }
   | {
-      kind: "permalink";
+      view: "permalink";
       room: string;
       args: string[];
     }
-  | { kind: "game"; args: string[] };
+  | { view: "game"; args: string[] };
 
 // ---------------------------------------------------------------------------
 // Component prop types.
@@ -138,11 +130,6 @@ export type VirtualJoysticksProps = {
   // skips binding nipplejs. Parents typically pass `true` only on the
   // in-game screen.
   active: boolean;
-};
-
-export type NoWasmViewProps = {
-  footerRef: RefObject<HTMLDivElement | null>;
-  footerHtml: string;
 };
 
 export type MenuContentProps = {
@@ -162,7 +149,7 @@ export type HomeMenuProps = {
 };
 
 export type TextMenuProps = {
-  screen: Extract<Screen, { kind: "validating" | "tooLate" | "invalid" }>;
+  screen: Extract<Screen, { view: "validating" | "tooLate" | "invalid" }>;
 };
 
 export type ChoosePetMenuProps = {
@@ -178,4 +165,8 @@ export type DeathmatchOrMenuProps = {
 export type PermalinkMenuProps = {
   room: string;
   onStart: () => void;
+};
+
+export type LogoProps = {
+  screen: Screen;
 };
