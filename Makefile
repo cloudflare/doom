@@ -5,11 +5,13 @@ export
 default:
 	@echo "Available Targets:"
 	@echo
-	@echo "  dev:        Run the Vite dev server (validates .dev.vars first)"
-	@echo "  env-check:  Verify .dev.vars exists"
-	@echo "  doom-build: Build Chocolate Doom (Emscripten/WASM) into doom/src/"
-	@echo "  doom-copy:  Copy chocolate-doom.* artifacts from doom/src/ into ./public"
-	@echo "  doom-clean: Remove doom/build and in-tree doom browser bundles"
+	@echo "  dev:               Run the Vite dev server (validates .dev.vars first)"
+	@echo "  env-check:         Verify .dev.vars exists"
+	@echo "  doom-build:        Build Chocolate Doom (Emscripten/WASM) into doom/src/"
+	@echo "  doom-copy:         Copy chocolate-doom.* artifacts from doom/src/ into ./public"
+	@echo "  doom-clean:        Remove doom/build and in-tree doom browser bundles"
+	@echo "  deploy-production: Deploy to production"
+	@echo "  deploy-staging:    Deploy to staging"
 
 .PHONY: node_modules doom-build doom-clean doom-copy dev env-check
 
@@ -26,6 +28,16 @@ env-check:
 # performs the same check via its `predev` script as defense in depth.
 dev: env-check
 	@npm run dev
+
+deploy-staging: env-check
+	@echo "Deploying to staging"
+	CLOUDFLARE_ENV=staging npx vite build
+	CLOUDFLARE_ENV=staging npx wrangler deploy --env staging
+
+deploy-production: env-check
+	@echo "Deploying to production"
+	CLOUDFLARE_ENV=production npx vite build
+	CLOUDFLARE_ENV=production npx wrangler deploy --env production
 
 # Drives a CMake-based Emscripten build of Chocolate Doom 3.1.1 with the
 # WebSocket networking module and copies the resulting browser artifacts

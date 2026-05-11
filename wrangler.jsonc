@@ -20,20 +20,6 @@
   "observability": {
     "enabled": true
   },
-  "env": {
-    "production": {
-      "route": {
-        "pattern": "silentspacemarine.com",
-        "custom_domain": true
-      }
-    },
-    "staging": {
-      "route": {
-        "pattern": "dev.silentspacemarine.com",
-        "custom_domain": true
-      }
-    }
-  },
   // global and local development
   "durable_objects": {
     "bindings": [
@@ -48,5 +34,23 @@
       "tag": "v1",
       "new_classes": ["Router"]
     }
-  ]
+  ],
+  "secrets": {
+    "required": ["DOOM_KEY"]
+  },
+  // Environment specifics
+  "env": {
+    "production": {
+      "route": {
+        "pattern": "silentspacemarine.com",
+        "custom_domain": true
+      }
+    },
+    "staging": {
+      "route": {
+        "pattern": "dev.silentspacemarine.com",
+        "custom_domain": true
+      }
+    }
+  }
 }

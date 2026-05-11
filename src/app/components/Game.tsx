@@ -58,12 +58,16 @@ export const Game = () => {
   const [iwad, setIwad] = useState("");
   const [host, setHost] = useState(true);
 
-  const [view, setView] = useState(() => {
-    if (!hasWebAssembly()) return "noWasm";
-    if (isMobile()) return "mobileInfo";
+  const homeOrJoin = () => {
     if (ROOM_PATTERN.test(location.pathname.replace(/^\//, "")))
       return "validating";
     return "home";
+  };
+
+  const [view, setView] = useState(() => {
+    if (!hasWebAssembly()) return "noWasm";
+    if (isMobile()) return "mobileInfo";
+    return homeOrJoin();
   });
 
   const typewriter = useCallback<Typewriter>((msg) => {
@@ -196,10 +200,24 @@ export const Game = () => {
                 For a better mobile experience, click "Hide Toolbar" in the URL
                 toolbar
               </h1>
-              <img src="hidetoolbar.png" alt="hide toolbar" />
+              <img
+                src="hidetoolbar.png"
+                alt="hide toolbar"
+                onClick={() => {
+                  setView(homeOrJoin());
+                }}
+              />
+              <a
+                className="btn primary"
+                id="solo"
+                onClick={() => {
+                  setView(homeOrJoin());
+                }}
+              >
+                Start
+              </a>
             </div>
           </div>
-          <VirtualJoysticks canvasRef={canvasRef} active={false} />
         </>
       );
     case "iwad":
