@@ -198,7 +198,7 @@ export const Game = () => {
             <div id="mobile" style={{ display: "block" }}>
               <h1>
                 For a better mobile experience, click "Hide Toolbar" in the URL
-                toolbar
+                toolbar and rotate to landscape mode
               </h1>
               <img
                 src="hidetoolbar.png"
@@ -207,16 +207,21 @@ export const Game = () => {
                   setView(homeOrJoin());
                 }}
               />
-              <a
-                className="btn primary"
-                id="solo"
-                onClick={() => {
-                  setView(homeOrJoin());
-                }}
-              >
-                Start
-              </a>
             </div>
+            <a
+              className="btn primary"
+              id="solo"
+              style={{
+                display: "block",
+                width: "fit-content",
+                margin: "1rem auto",
+              }}
+              onClick={() => {
+                setView(homeOrJoin());
+              }}
+            >
+              Start
+            </a>
           </div>
         </>
       );
