@@ -1,12 +1,6 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type FC,
-} from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import type { ReactNode, RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   hasWebAssembly,
   isMobile,
@@ -14,9 +8,11 @@ import {
   bootDoom,
   ENDPOINTS,
   COMMON_ARGS,
+  IWADS,
   ROOM_PATTERN,
 } from "../lib/game_tools";
 import { VirtualJoysticks } from "./VirtualJoysticks";
+import { useDownloadProgress, DownloadProgress } from "./ProgressBar";
 import {
   GameFooter,
   useDoomPrintHandler,
@@ -25,343 +21,337 @@ import {
 } from "./GameFooter";
 import { NoWasmView, Logo } from "./Helpers";
 import QRCode from "react-qr-code";
-import type {
-  ChoosePetMenuProps,
-  DeathmatchOrMenuProps,
-  HomeMenuProps,
-  MenuContentProps,
-  PermalinkMenuProps,
-  Screen,
-  TextMenuProps,
-} from "../types";
 
-export const Game: FC = () => {
-  const location = useLocation();
-  const navigate = useNavigate();
-
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const footerRef = useRef<GameFooterHandle>(null);
-
-  const [screen, setScreen] = useState<Screen>(() => {
-    if (!hasWebAssembly()) return { view: "noWasm" };
-    if (isMobile()) return { view: "mobileInfo" };
-    if (ROOM_PATTERN.test(location.pathname.replace(/^\//, "")))
-      return { view: "validating" };
-    return { view: "home" };
-  });
-  const [petName, setPetName] = useState<string>(() => genPetName());
-
-  const room = useMemo(
-    () => location.pathname.replace(/^\//, ""),
-    [location.pathname],
-  );
-
-  // Stable proxy that forwards messages to <GameFooter>'s imperative API.
-  // The footer owns its own message/cycling/animation state internally.
-  const typewriter = useCallback<Typewriter>((msg) => {
-    footerRef.current?.typewriter(msg);
-  }, []);
-
-  // Mobile info screen: show for 5 seconds, then route based on URL.
-  useEffect(() => {
-    if (screen.view !== "mobileInfo") return;
-    const t = window.setTimeout(() => {
-      const path = location.pathname.replace(/^\//, "");
-      setScreen(
-        ROOM_PATTERN.test(path) ? { view: "validating" } : { view: "home" },
-      );
-    }, 5000);
-    return () => window.clearTimeout(t);
-  }, [screen.view, location.pathname]);
-
-  // Validate room when entering a multiplayer URL.
-  useEffect(() => {
-    if (screen.view !== "validating") return;
-    typewriter('<h1 class="vspace">Validating room...</h1>');
-    let cancelled = false;
-    void fetch(`${ENDPOINTS.base}/api/room/${room}`)
-      .then((r) => r.json())
-      .then((data: { room?: string; gameStarted?: boolean }) => {
-        if (cancelled) return;
-        if (!data.room) {
-          setScreen({ view: "invalid" });
-          return;
-        }
-        if (data.gameStarted) {
-          setScreen({ view: "tooLate" });
-          return;
-        }
-        // Small delay to mimic the previous setTimeout(... 3000).
-        window.setTimeout(() => {
-          if (cancelled) return;
-          setScreen({ view: "choosePet", mode: "join", room });
-        }, 3000);
-      })
-      .catch(() => {
-        if (!cancelled) setScreen({ view: "invalid" });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [screen.view, room, typewriter]);
-
-  // Auto-redirects for terminal info screens.
-  useEffect(() => {
-    if (screen.view === "invalid") {
-      const t = window.setTimeout(() => navigate("/", { replace: true }), 3000);
-      return () => window.clearTimeout(t);
-    }
-    if (screen.view === "tooLate") {
-      const t = window.setTimeout(() => navigate("/", { replace: true }), 7000);
-      return () => window.clearTimeout(t);
-    }
-    return undefined;
-  }, [screen.view, navigate]);
-
-  // Disable pinch-to-zoom on iOS (matches the original `gesturestart` hack).
-  useEffect(() => {
-    const stopGesture = (e: Event) => e.preventDefault();
-    document.addEventListener("gesturestart", stopGesture);
-    return () => document.removeEventListener("gesturestart", stopGesture);
-  }, []);
-
-  // chocolate-doom's `print` callback. The doom-specific message decoding
-  // lives alongside <GameFooter> in ./GameFooter so this component stays
-  // focused on screen routing.
-  const handlePrint = useDoomPrintHandler(typewriter, room, navigate);
-
-  // Boot the WASM module when entering the "game" screen.
-  useEffect(() => {
-    if (screen.view !== "game") return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const onContextLost = (e: Event) => {
-      window.alert("WebGL context lost. You will need to reload the page.");
-      e.preventDefault();
-    };
-    canvas.addEventListener("webglcontextlost", onContextLost, false);
-
-    void bootDoom(screen.args, canvas, handlePrint).catch((err) => {
-      console.error(err);
-    });
-
-    return () => {
-      canvas.removeEventListener("webglcontextlost", onContextLost, false);
-    };
-    // We deliberately depend on screen reference; args are stable per game.
-  }, [screen, handlePrint]);
-
-  // Screen-specific transitions
-  const startSolo = useCallback(() => {
-    typewriter([
-      "W,A,S,D OR ARROWS TO MOVE, Q,E,Z|O TO STRAFE, X|P FOR SPEED, C TO OPEN",
-      "TAB SHOWS THE MAP, T TO WRITE (MULTIPLAYER), YOU CAN ALSO USE THE MOUSE",
-    ]);
-    setScreen({ view: "game", args: [...COMMON_ARGS] });
-  }, [typewriter]);
-
-  const startMultiplayer = useCallback(() => {
-    void fetch(`${ENDPOINTS.base}/api/newroom`)
-      .then((r) => r.json())
-      .then((data: { room: string }) => {
-        setScreen({ view: "choosePet", mode: "host", room: data.room });
-      });
-  }, []);
-
-  const onChoosePetSubmit = useCallback(
-    (s: Screen & { view: "choosePet" }) => (pet: string) => {
-      const trimmed = pet.trim();
-      if (!trimmed) return;
-      if (s.mode === "join" && s.room) {
-        const args = [
-          ...COMMON_ARGS,
-          "-pet",
-          trimmed,
-          "-connect",
-          "1",
-          "-dup",
-          "1",
-          "-wss",
-          `${ENDPOINTS.wsbase}/api/ws/${s.room}`,
-        ];
-        typewriter([
-          "Connecting to master server. Please wait.",
-          "Still trying. Is the master server for this room running?",
-        ]);
-        setScreen({ view: "game", args });
-      } else if (s.mode === "host" && s.room) {
-        setScreen({ view: "deathmatchOr", pet: trimmed, room: s.room });
-      }
-    },
-    [typewriter],
-  );
-
-  const onDeathmatchChoice = useCallback(
-    (s: Screen & { view: "deathmatchOr" }) => (deathmatch: boolean) => {
-      const args = [
-        ...COMMON_ARGS,
-        "-pet",
-        s.pet,
-        ...(deathmatch ? ["-deathmatch"] : []),
-      ];
-      setScreen({ view: "permalink", room: s.room, args });
-    },
-    [],
-  );
-
-  const onPermalinkStart = useCallback(
-    (s: Screen & { view: "permalink" }) => () => {
-      const args = [
-        ...s.args,
-        "-server",
-        "-privateserver",
-        "-dup",
-        "1",
-        "-wss",
-        `${ENDPOINTS.wsbase}/api/ws/${s.room}`,
-      ];
-      setScreen({ view: "game", args });
-    },
-    [],
-  );
-
-  if (screen.view === "noWasm") {
-    return <NoWasmView />;
-  }
-
-  if (screen.view === "mobileInfo") {
-    return (
-      <>
-        <div id="container">
-          <div id="mobile" style={{ display: "block" }}>
-            <h1>
-              For a better mobile experience, click "Hide Toolbar" in the URL
-              toolbar
-            </h1>
-            <img src="hidetoolbar.png" alt="hide toolbar" />
-          </div>
-        </div>
-        <VirtualJoysticks canvasRef={canvasRef} active={false} />
-      </>
-    );
-  }
-
+const Monitor = ({
+  children,
+  canvasRef,
+  footerRef,
+  joysticksActive,
+}: {
+  children: ReactNode;
+  canvasRef: RefObject<HTMLCanvasElement | null>;
+  footerRef: RefObject<GameFooterHandle | null>;
+  joysticksActive: boolean;
+}) => {
   return (
     <>
       <div id="container">
         <div id="monitor" style={{ display: "block" }}>
-          <div id="monitorscreen">
-            <canvas
-              id="canvas"
-              ref={canvasRef}
-              onContextMenu={(e) => e.preventDefault()}
-              tabIndex={-1}
-              style={{ display: screen.view === "game" ? "" : "none" }}
-            />
-            {screen.view !== "game" && (
-              <div id="menu">
-                <Logo screen={screen} />
-                <MenuContent
-                  screen={screen}
-                  petName={petName}
-                  setPetName={setPetName}
-                  onSolo={startSolo}
-                  onMultiplayer={startMultiplayer}
-                  onChoosePetSubmit={
-                    screen.view === "choosePet"
-                      ? onChoosePetSubmit(screen)
-                      : undefined
-                  }
-                  onDeathmatchChoice={
-                    screen.view === "deathmatchOr"
-                      ? onDeathmatchChoice(screen)
-                      : undefined
-                  }
-                  onPermalinkStart={
-                    screen.view === "permalink"
-                      ? onPermalinkStart(screen)
-                      : undefined
-                  }
-                />
-              </div>
-            )}
-          </div>
+          <div id="monitorscreen">{children}</div>
           <GameFooter ref={footerRef} />
         </div>
       </div>
-      <VirtualJoysticks canvasRef={canvasRef} active={screen.view === "game"} />
+      <VirtualJoysticks canvasRef={canvasRef} active={joysticksActive} />
     </>
   );
 };
 
-const MenuContent: FC<MenuContentProps> = ({
-  screen,
-  petName,
-  setPetName,
-  onSolo,
-  onMultiplayer,
-  onChoosePetSubmit,
-  onDeathmatchChoice,
-  onPermalinkStart,
-}) => {
-  switch (screen.view) {
-    case "home":
-      return <HomeMenu onSolo={onSolo} onMultiplayer={onMultiplayer} />;
-    case "validating":
-    case "tooLate":
-    case "invalid":
-      return <TextMenu screen={screen} />;
-    case "choosePet":
+export const Game = () => {
+  const navigate = useNavigate();
+  const canvasRef = useRef(null);
+  const footerRef = useRef(null);
+  const [multiplayer, setMultiplayer] = useState(false);
+  const [pet, setPet] = useState("");
+  const [error, setError] = useState("");
+  const [room, setRoom] = useState("");
+  const [type, setType] = useState("");
+  const [iwad, setIwad] = useState("");
+  const [host, setHost] = useState(true);
+
+  const [view, setView] = useState(() => {
+    if (!hasWebAssembly()) return "noWasm";
+    if (isMobile()) return "mobileInfo";
+    if (ROOM_PATTERN.test(location.pathname.replace(/^\//, "")))
+      return "validating";
+    return "home";
+  });
+
+  const typewriter = useCallback<Typewriter>((msg) => {
+    footerRef.current?.typewriter(msg);
+  }, []);
+  const handlePrint = useDoomPrintHandler(typewriter, room, navigate);
+
+  const {
+    onProgress: handleDownloadProgress,
+    totalPercent,
+    allDone: downloadsDone,
+    hasTotals,
+    totalLoaded,
+    totalTotal,
+  } = useDownloadProgress();
+
+  const showError = (msg: string) => {
+    setError(msg);
+    setView("error");
+  };
+
+  useEffect(() => {
+    switch (view) {
+      case "validating":
+        fetch(
+          `${ENDPOINTS.base}/api/room/${location.pathname.replace(/^\//, "") ?? ""}`,
+        )
+          .then((r) => r.json())
+          .then((data) => {
+            console.log(data);
+            if (!data.room) {
+              showError("Invalid room");
+              return;
+            }
+            if (data.gameStarted) {
+              showError("Game has already started, too late.");
+              return;
+            }
+            setIwad(data.iwad);
+            setRoom(data.room);
+            setType(data.type);
+            setMultiplayer(true);
+            setHost(false);
+            setView(data.serverReady ? "pet" : "waitingForHost");
+          })
+          .catch(() => {});
+        break;
+      case "waitingForHost": {
+        const room = location.pathname.replace(/^\//, "");
+        const interval = setInterval(() => {
+          fetch(`${ENDPOINTS.base}/api/room/${room}`)
+            .then((r) => r.json())
+            .then((data) => {
+              if (!data.room) {
+                showError("Invalid room");
+                return;
+              }
+              if (data.gameStarted) {
+                showError("Game has already started, too late.");
+                return;
+              }
+              if (data.gameEnded) {
+                showError("Game has already ended, too late.");
+                return;
+              }
+              if (data.serverReady) {
+                setView("pet");
+              }
+            })
+            .catch(() => {});
+        }, 1500);
+        return () => clearInterval(interval);
+      }
+      case "game":
+        let xtra_args = [];
+        if (iwad) {
+          if (multiplayer) {
+            xtra_args = [
+              "-pet",
+              pet,
+              "-dup",
+              "1",
+              "-wss",
+              `${ENDPOINTS.wsbase}/api/ws/${room}/host`,
+            ];
+            if (type == "deathmatch") {
+              xtra_args = [...xtra_args, "-deathmatch"];
+            }
+            if (host) {
+              xtra_args = [...xtra_args, "-server", "-privateserver"];
+            } else {
+              xtra_args = [...xtra_args, "-connect", "1"];
+            }
+          }
+          const args = [
+            ...COMMON_ARGS,
+            "-iwad",
+            IWADS[iwad].file,
+            ...xtra_args,
+          ];
+          bootDoom(
+            args,
+            canvasRef.current,
+            handlePrint,
+            iwad,
+            handleDownloadProgress,
+          ).catch((err) => {
+            console.log(err);
+            showError(err.toString());
+          });
+        }
+    }
+  }, [view]);
+
+  const monitorProps = {
+    canvasRef,
+    footerRef,
+    joysticksActive: view === "game",
+  };
+
+  switch (view) {
+    case "noWasm":
+      return <NoWasmView />;
+    case "mobileInfo":
       return (
-        <ChoosePetMenu
-          petName={petName}
-          setPetName={setPetName}
-          onSubmit={onChoosePetSubmit ?? (() => undefined)}
-        />
+        <>
+          <div id="container">
+            <div id="mobile" style={{ display: "block" }}>
+              <h1>
+                For a better mobile experience, click "Hide Toolbar" in the URL
+                toolbar
+              </h1>
+              <img src="hidetoolbar.png" alt="hide toolbar" />
+            </div>
+          </div>
+          <VirtualJoysticks canvasRef={canvasRef} active={false} />
+        </>
       );
-    case "deathmatchOr":
+    case "iwad":
       return (
-        <DeathmatchOrMenu onChoice={onDeathmatchChoice ?? (() => undefined)} />
+        <Monitor {...monitorProps}>
+          <Logo />
+          <ChooseMap
+            onSubmit={(iwad: string) => {
+              setIwad(iwad);
+              if (multiplayer) {
+                setView("pet");
+              } else {
+                setView("game");
+              }
+            }}
+          />
+        </Monitor>
+      );
+    case "pet":
+      return (
+        <Monitor {...monitorProps}>
+          <Logo />
+          <ChoosePet
+            onSubmit={(pet: string) => {
+              setPet(pet);
+              if (room.length) {
+                setView("game");
+              } else {
+                setView("type-of-game");
+              }
+            }}
+          />
+        </Monitor>
+      );
+    case "type-of-game":
+      return (
+        <Monitor {...monitorProps}>
+          <Logo />
+          <TypeOfGame
+            onSubmit={(type: string) => {
+              setType(type);
+              setView("permalink");
+            }}
+          />
+        </Monitor>
       );
     case "permalink":
       return (
-        <PermalinkMenu
-          room={screen.room}
-          onStart={onPermalinkStart ?? (() => undefined)}
-        />
+        <Monitor {...monitorProps}>
+          <Permalink
+            iwad={iwad}
+            type={type}
+            onStart={(room: string) => {
+              setRoom(room);
+              setView("game");
+            }}
+          />
+        </Monitor>
+      );
+    case "validating":
+      return (
+        <Monitor {...monitorProps}>
+          <Logo />
+          <div id="text">
+            <h1 className="vspace">Validating room...</h1>
+          </div>
+        </Monitor>
+      );
+    case "waitingForHost":
+      return (
+        <Monitor {...monitorProps}>
+          <Logo />
+          <div id="text">
+            <h1 className="vspace">
+              Waiting for the host to start the game...
+            </h1>
+            <h1>Hang tight — this screen will advance automatically</h1>
+          </div>
+        </Monitor>
+      );
+    case "error":
+      return (
+        <Monitor {...monitorProps}>
+          <Logo />
+          <div id="text">
+            <h1 className="vspace">{error}</h1>
+          </div>
+        </Monitor>
       );
     case "game":
-    case "noWasm":
-    case "mobileInfo":
-      return null;
+      return (
+        <Monitor {...monitorProps}>
+          {/* Canvas is always mounted AND visible from the very first render
+              so SDL_CreateWindow (called during chocolate-doom's startup) can
+              measure its computed dimensions from the surrounding
+              #monitorscreen layout. Hiding it with `display: none` causes SDL
+              to capture a 0x0 framebuffer and the game renders nothing even
+              after the canvas is later revealed. The DownloadProgress
+              component sits on top as an absolutely-positioned overlay (see
+              ProgressBar.tsx) while the WAD streams in. */}
+          <canvas
+            id="canvas"
+            ref={canvasRef}
+            onContextMenu={(e) => e.preventDefault()}
+            tabIndex={-1}
+            style={{ display: view === "game" ? "" : "none" }}
+          />
+          {!downloadsDone && (
+            <DownloadProgress
+              iwadLabel={IWADS[iwad]?.label ?? "Doom"}
+              totalPercent={totalPercent}
+              hasTotals={hasTotals}
+              totalLoaded={totalLoaded}
+              totalTotal={totalTotal}
+            />
+          )}
+        </Monitor>
+      );
+    default:
+      return (
+        <Monitor {...monitorProps}>
+          <Logo />
+          <Home
+            onSubmit={(multiplayer: boolean) => {
+              setMultiplayer(multiplayer);
+              setView("iwad");
+            }}
+          />
+        </Monitor>
+      );
   }
 };
 
-const HomeMenu: FC<HomeMenuProps> = ({ onSolo, onMultiplayer }) => {
-  const [pressed, setPressed] = useState<"solo" | "multiplayer" | null>(null);
-  const click = (which: "solo" | "multiplayer", fn: () => void) => () => {
-    setPressed(which);
-    window.setTimeout(() => {
-      setPressed(null);
-      fn();
-    }, 100);
-  };
-
+const Home = ({ onSubmit }) => {
   return (
     <>
       <div id="buttons">
         <a
-          className={`btn ${pressed === "multiplayer" ? "grey" : "secondary"}`}
+          className="btn secondary"
           id="multiplayer"
-          onClick={click("multiplayer", onMultiplayer)}
+          onClick={() => {
+            onSubmit(true);
+          }}
         >
           Start Multiplayer
         </a>
         <a
-          className={`btn ${pressed === "solo" ? "grey" : "primary"}`}
+          className="btn primary"
           id="solo"
-          onClick={click("solo", onSolo)}
+          onClick={() => {
+            onSubmit(false);
+          }}
         >
           Play Solo
         </a>
@@ -409,53 +399,31 @@ const HomeMenu: FC<HomeMenuProps> = ({ onSolo, onMultiplayer }) => {
   );
 };
 
-const TextMenu: FC<TextMenuProps> = ({ screen }) => {
-  if (screen.view === "validating") {
-    return (
-      <div id="text">
-        <h1 className="vspace">Validating room...</h1>
-      </div>
-    );
-  }
-  if (screen.view === "tooLate") {
-    return (
-      <div id="text">
-        <h1 className="vspace">Too late, this game has already started ;(</h1>
-        <h1>Redirecting you back...</h1>
-      </div>
-    );
-  }
+const ChooseMap = ({ onSubmit }) => {
   return (
     <div id="text">
-      <h1>Invalid room. Redirecting.</h1>
+      <h1 className="vspace">Choose which IWAD to play</h1>
+      <a className="btn primary" onClick={() => onSubmit("doom1")}>
+        {IWADS.doom1.label}
+      </a>
+      <a className="btn secondary" onClick={() => onSubmit("doom2")}>
+        {IWADS.doom2.label}
+      </a>
     </div>
   );
 };
 
-const ChoosePetMenu: FC<ChoosePetMenuProps> = ({
-  petName,
-  setPetName,
-  onSubmit,
-}) => {
-  const [pressed, setPressed] = useState<"random" | "go" | null>(null);
-  const click = (which: "random" | "go", fn: () => void) => () => {
-    setPressed(which);
-    window.setTimeout(() => {
-      setPressed(null);
-      fn();
-    }, 100);
-  };
-  const goClass =
-    pressed === "go" || petName.length === 0 ? "grey" : "secondary";
-  const randomClass = pressed === "random" ? "grey" : "tertiary";
+const ChoosePet = ({ onSubmit }) => {
+  const [petName, setPetName] = useState(genPetName());
   return (
     <div id="text">
-      <h1 className="vspace">Name your pet here</h1>
+      <h1 className="vspace">The host is about to start the game</h1>
+      <h1>Name your pet here</h1>
       <div className="pinput">
         <a
-          className={`btn ${randomClass}`}
+          className="btn tertiary"
           id="random"
-          onClick={click("random", () => setPetName(genPetName()))}
+          onClick={() => setPetName(genPetName())}
         >
           {"\u21BB"}
         </a>
@@ -471,11 +439,9 @@ const ChoosePetMenu: FC<ChoosePetMenuProps> = ({
           }
         />
         <a
-          className={`btn ${goClass}`}
+          className="btn secondary"
           id="mypet"
-          onClick={
-            petName.length ? click("go", () => onSubmit(petName)) : undefined
-          }
+          onClick={petName.length ? () => onSubmit(petName) : undefined}
         >
           Go
         </a>
@@ -484,29 +450,21 @@ const ChoosePetMenu: FC<ChoosePetMenuProps> = ({
   );
 };
 
-const DeathmatchOrMenu: FC<DeathmatchOrMenuProps> = ({ onChoice }) => {
-  const [pressed, setPressed] = useState<"dm" | "co" | null>(null);
-  const click = (which: "dm" | "co", fn: () => void) => () => {
-    setPressed(which);
-    window.setTimeout(() => {
-      setPressed(null);
-      fn();
-    }, 100);
-  };
+const TypeOfGame = ({ onSubmit }) => {
   return (
     <div id="text">
       <h1 className="vspace">Chose the type of multiplayer game</h1>
       <a
-        className={`btn ${pressed === "dm" ? "grey" : "secondary"}`}
+        className="btn secondary"
         id="deathmatch"
-        onClick={click("dm", () => onChoice(true))}
+        onClick={() => onSubmit("deathmatch")}
       >
         Deathmatch
       </a>
       <a
-        className={`btn ${pressed === "co" ? "grey" : "primary"}`}
+        className="btn primary"
         id="cooperative"
-        onClick={click("co", () => onChoice(false))}
+        onClick={() => onSubmit("cooperative")}
       >
         Cooperative
       </a>
@@ -514,64 +472,51 @@ const DeathmatchOrMenu: FC<DeathmatchOrMenuProps> = ({ onChoice }) => {
   );
 };
 
-const PermalinkMenu: FC<PermalinkMenuProps> = ({ room, onStart }) => {
-  const [pressed, setPressed] = useState<"clip" | "start" | null>(null);
-  const [qr, setQr] = useState(false);
-  const click = (which: "clip" | "start", fn: () => void) => () => {
-    setPressed(which);
-    window.setTimeout(() => {
-      setPressed(null);
-      fn();
-    }, 100);
-  };
+const Permalink = ({ onStart, iwad, type }) => {
+  const navigate = useNavigate();
+  const [room, setRoom] = useState("");
   const permalink = `${ENDPOINTS.web}/${room}`;
-  const display = `${ENDPOINTS.web}/${room.slice(0, 8)}...${room.slice(-8)}`;
   const copyPermalink = () => {
     void navigator.clipboard?.writeText(permalink).catch((err) => {
       console.error("Failed to copy permalink:", err);
     });
   };
+
+  useEffect(() => {
+    void fetch(`${ENDPOINTS.base}/api/newroom`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ iwad, type }),
+    })
+      .then((r) => r.json())
+      .then((data: { room: string }) => {
+        navigate(`/${room}`);
+        setRoom(data.room);
+      });
+  }, [iwad, type]);
+
   return (
     <div id="text">
-      {!qr ? (
-        <>
-          <h1 className="vspace">Doom Multiplayer is about to start</h1>
-          <h1 className="vspace">Share this permalink with your friends:</h1>
-          <h1>
-            <a className="h">{display}</a>
-          </h1>
-        </>
-      ) : (
-        <QRCode value={permalink} />
-      )}
-      <h1 className="vspace">Your friends can join until you start the game</h1>
+      {room.length && <QRCode value={permalink} />}
+      <h1 className="vspace">Share the link or the QRCode with your friends</h1>
+      <h1>Players can join until you start the game</h1>
       <h1>Move to next the screen, wait for them, and</h1>
       <h1>then hit space to start the game</h1>
       <h1 />
       <div className="vspace">
         <a
           id="clip"
-          className={`btn ${pressed === "clip" ? "grey" : "primary"}`}
+          className="btn primary"
           data-room={room}
-          onClick={click("clip", copyPermalink)}
+          onClick={copyPermalink}
         >
           Copy Permalink
         </a>
         <a
-          id="clip"
-          className={`btn ${pressed === "clip" ? "grey" : "tertiary"}`}
-          data-room={room}
-          onClick={() => {
-            setQr(!qr);
-          }}
-        >
-          {qr ? `Hide QR Code` : `Show QR Code`}{" "}
-        </a>
-        <a
-          className={`btn ${pressed === "start" ? "grey" : "secondary"}`}
+          className="btn secondary"
           id="start"
           data-room={room}
-          onClick={click("start", onStart)}
+          onClick={() => onStart(room)}
         >
           Next
         </a>

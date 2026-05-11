@@ -1,8 +1,6 @@
-import { type FC } from "react";
 import { GameFooter } from "./GameFooter";
-import type { LogoProps } from "../types";
 
-export const NoWasmView: FC = () => (
+export const NoWasmView = () => (
   <div id="container">
     <div id="monitor" style={{ display: "block" }}>
       <div id="monitorscreen">
@@ -21,18 +19,6 @@ export const NoWasmView: FC = () => (
   </div>
 );
 
-export const Logo: FC<LogoProps> = ({ screen }) => {
-  const showLogo =
-    screen.view === "home" ||
-    screen.view === "validating" ||
-    screen.view === "tooLate" ||
-    screen.view === "choosePet" ||
-    screen.view === "deathmatchOr";
-  return (
-    <div
-      id="logo"
-      className="vspace"
-      style={{ display: showLogo ? "" : "none" }}
-    />
-  );
+export const Logo = () => {
+  return <div id="logo" className="vspace" />;
 };

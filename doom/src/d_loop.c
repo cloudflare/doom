@@ -18,6 +18,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <emscripten.h>
 
@@ -472,6 +473,12 @@ boolean D_InitNetGame(net_connect_data_t *connect_data)
     {
         // Doom-wasm: clients pick a random non-zero instanceUID. The
         // websocket relay uses this to route packets back to us.
+        // Seed rand() locally so this works regardless of whether any
+        // earlier code path (e.g. NET_GetRandomPetName) happened to seed
+        // it -- when "-pet <name>" is supplied, that path is skipped and
+        // an unseeded rand() returns 0, colliding with the server's
+        // well-known instanceUID and breaking netcode routing.
+        srand((unsigned int)time(NULL));
         instanceUID = rand() % 0xfffe;
 
         //!

@@ -5,6 +5,8 @@ import type { RefObject } from "react";
 // non-MODULARIZE build). The bundle reads a pre-existing global `Module`
 // for its config and auto-runs as soon as it loads, attaching helpers
 // (FS, callMain, ...) onto that same object once initialised.
+//
+// Only the surface we touch from game_tools.ts is typed here.
 // ---------------------------------------------------------------------------
 
 export type EmscriptenFS = {
@@ -79,45 +81,6 @@ declare global {
 }
 
 // ---------------------------------------------------------------------------
-// Networking endpoints (computed once at module load in Game.tsx).
-// ---------------------------------------------------------------------------
-
-export type Endpoints = {
-  // Page origin used to build sharable permalinks.
-  web: string;
-  // Empty in production so HTTP fetches resolve as origin-relative paths.
-  base: string;
-  // Absolute ws://|wss:// origin — chocolate-doom's `-wss` arg requires a
-  // fully-qualified WebSocket URL.
-  wsbase: string;
-};
-
-// ---------------------------------------------------------------------------
-// Screen state machine for the Game component.
-// ---------------------------------------------------------------------------
-
-export type Screen =
-  | { view: "noWasm" }
-  | { view: "mobileInfo" }
-  | { view: "home" }
-  | { view: "validating" }
-  | { view: "invalid" }
-  | { view: "tooLate" }
-  | {
-      view: "choosePet";
-      mode: "host" | "join";
-      // For "join", we already know the room.
-      room?: string;
-    }
-  | { view: "deathmatchOr"; pet: string; room: string }
-  | {
-      view: "permalink";
-      room: string;
-      args: string[];
-    }
-  | { view: "game"; args: string[] };
-
-// ---------------------------------------------------------------------------
 // Component prop types.
 // ---------------------------------------------------------------------------
 
@@ -130,43 +93,4 @@ export type VirtualJoysticksProps = {
   // skips binding nipplejs. Parents typically pass `true` only on the
   // in-game screen.
   active: boolean;
-};
-
-export type MenuContentProps = {
-  screen: Screen;
-  petName: string;
-  setPetName: (v: string) => void;
-  onSolo: () => void;
-  onMultiplayer: () => void;
-  onChoosePetSubmit?: (pet: string) => void;
-  onDeathmatchChoice?: (deathmatch: boolean) => void;
-  onPermalinkStart?: () => void;
-};
-
-export type HomeMenuProps = {
-  onSolo: () => void;
-  onMultiplayer: () => void;
-};
-
-export type TextMenuProps = {
-  screen: Extract<Screen, { view: "validating" | "tooLate" | "invalid" }>;
-};
-
-export type ChoosePetMenuProps = {
-  petName: string;
-  setPetName: (v: string) => void;
-  onSubmit: (pet: string) => void;
-};
-
-export type DeathmatchOrMenuProps = {
-  onChoice: (dm: boolean) => void;
-};
-
-export type PermalinkMenuProps = {
-  room: string;
-  onStart: () => void;
-};
-
-export type LogoProps = {
-  screen: Screen;
 };

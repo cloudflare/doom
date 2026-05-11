@@ -1213,7 +1213,20 @@ void NET_CL_Init(void)
 
     if (net_player_name == NULL)
     {
-        net_player_name = NET_GetRandomPetName();
+        //!
+        // @arg <name>
+        //
+        // Specifies the player name to use in the game.
+        //
+        int i = M_CheckParmWithArgs("-pet", 1);
+        if (i > 0)
+        {
+            net_player_name = myargv[i + 1];
+        }
+        else
+        {
+            net_player_name = NET_GetRandomPetName();
+        }
     }
 }
 

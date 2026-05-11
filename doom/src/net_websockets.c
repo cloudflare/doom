@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "doomtype.h"
 #include "i_system.h"
@@ -249,9 +250,12 @@ static boolean NET_Websockets_RecvPacket(net_addr_t **addr, net_packet_t **packe
 
     if (InitWebSockets() == false) return false;
 
-    popped = WebsocketsQueuePop(&client_queue);
-
-    if (popped != NULL) {
+    while ((popped = WebsocketsQueuePop(&client_queue)) != NULL) {
+        if (popped->packet->len >= 5 && memcmp(popped->packet->data, "doom:", 5) == 0) {
+            printf("%.*s\n", popped->packet->len, (char *)popped->packet->data);
+            NET_FreePacket(popped->packet);
+            continue;
+        }
         *packet = popped->packet;
         *addr = FindAddressByIp((*(uint32_t *)(popped->from)));
         return true;

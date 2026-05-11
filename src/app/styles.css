@@ -33,10 +33,15 @@ body {
     /* vietnamese */
 }
 
-#menu {
-    width: auto;
-    background-color: black;
+#logo {
     padding-top: 60px;
+    background-color: black;
+    background-image: url("/retro.png");
+    background-repeat: no-repeat;
+    background-size: 320px 200px;
+    width: 320px;
+    height: 200px;
+    margin: auto;
 }
 
 #mobile {
@@ -55,15 +60,6 @@ body {
     font-size: 24px;
     margin: 20px;
     text-align: center;
-}
-
-#logo {
-    background-image: url("/retro.png");
-    background-repeat: no-repeat;
-    background-size: 320px 200px;
-    width: 320px;
-    height: 200px;
-    margin: auto;
 }
 
 #text {
@@ -303,6 +299,7 @@ input[type="text"] {
 
 @media only screen and (max-width: 760px) and (orientation: portrait) {
     #logo {
+        padding-top: 0px;
         background-size: 120px 80px;
         width: 120px;
         height: 80px;
@@ -331,10 +328,6 @@ input[type="text"] {
     #monitor {
         margin: 0%;
     }
-    #menu {
-        width: auto;
-        padding-top: 0px;
-    }
     #joystick1 {
         position: relative;
         width: 50%;
@@ -351,6 +344,8 @@ input[type="text"] {
         display: block;
     }
 }
+
+/* landscape mobile phone */
 
 @media only screen and (min-device-width: 320px) and (max-device-width: 812px) and (-webkit-min-device-pixel-ratio: 2) and (orientation: landscape) {
     html {
@@ -387,6 +382,7 @@ input[type="text"] {
         height: 100px;
     }
     #logo {
+        padding-top: 0px;
         background-size: 120px 80px;
         width: 120px;
         height: 80px;
@@ -407,9 +403,5 @@ input[type="text"] {
     input[type="text"] {
         font-family: "VT323", monospace;
         font-size: 12px;
-    }
-    #menu {
-        width: auto;
-        padding-top: 0px;
     }
 }

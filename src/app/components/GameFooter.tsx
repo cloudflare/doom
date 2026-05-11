@@ -105,8 +105,9 @@ export const useDoomPrintHandler = (
         switch (id) {
           case 2:
             msg = [
-              "Connected to Cloudflare WebSockets. Waiting for other players",
+              "Connected to Cloudflare Server. Waiting for other players",
               "Still here, waiting for the host to start the game",
+              "Note that new players can't join after the host starts the game",
             ];
             break;
           case 9:
@@ -130,6 +131,9 @@ export const useDoomPrintHandler = (
           case 5:
           case 8:
             msg = false;
+            break;
+          case 13:
+            msg = ["THE HOST DISCONNECTED, WE HAVE NO SERVER"];
             break;
           default:
             msg = (rawMsg ?? "").trim();
