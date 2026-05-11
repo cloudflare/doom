@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 // ---------------------------------------------------------------------------
 // useDownloadProgress
@@ -8,19 +8,40 @@ import { useCallback, useMemo, useState } from "react";
 //   - progress:     keyed by virtual-FS filename, the latest event per file
 //   - onProgress:   the callback to hand to bootDoom
 //   - totalPercent: combined loaded/total ratio across all known files (0..100)
-//   - allDone:      true once every file we've seen has reported done=true
+//   - allDone:      true once every expected file has reported done=true.
+//                   If `expected` is omitted the hook falls back to "every
+//                   file I've observed so far is done", which is correct
+//                   only when one file is preloaded — see the parallel
+//                   preload note below.
 //   - hasTotals:    true if at least one file has reported a non-zero total
 //                   (used to switch between a determinate and indeterminate
 //                   bar)
+//
+// Why `expected` matters: bootDoom triggers multiple preloads in parallel
+// (the WAD and default.cfg). The smaller file (default.cfg) finishes and
+// emits `done: true` long before the larger file emits its FIRST event.
+// Without a known expected set, the hook briefly sees one file in `progress`
+// that is already done and reports `allDone: true`, causing the overlay to
+// flicker off and back on. Declaring the expected files makes the batch
+// stay "in progress" until the slower file has reported in and finished.
 // ---------------------------------------------------------------------------
 type ProgressMap = Record<string, any>;
 
-export const useDownloadProgress = () => {
+export const useDownloadProgress = (expected?: readonly string[]) => {
   const [progress, setProgress] = useState<ProgressMap>({});
 
   const onProgress = useCallback((p:any) => {
     setProgress((prev) => ({ ...prev, [p.file]: p }));
   }, []);
+
+  // Reset progress state when the expected set changes (e.g. switching
+  // IWAD between sessions). Without this, stale `done:true` entries from a
+  // previous boot would make `allDone` immediately true. Keyed off the
+  // joined string so we don't churn on identity-only changes to the array.
+  const expectedKey = expected ? expected.join("|") : "";
+  useEffect(() => {
+    setProgress({});
+  }, [expectedKey]);
 
   const { totalPercent, allDone, hasTotals, totalLoaded, totalTotal } =
     useMemo(() => {
@@ -37,23 +58,31 @@ export const useDownloadProgress = () => {
       let loadedSum = 0;
       let totalSum = 0;
       let anyTotal = false;
-      let everyDone = true;
+      let everyObservedDone = true;
       for (const e of entries) {
         loadedSum += e.loaded;
         totalSum += e.total;
         if (e.total > 0) anyTotal = true;
-        if (!e.done) everyDone = false;
+        if (!e.done) everyObservedDone = false;
       }
+      // If the caller declared which files to expect, the batch isn't
+      // "done" until each expected file has been observed AND marked done.
+      // Fall back to the old observed-only heuristic when expected is
+      // unspecified.
+      const allExpectedDone =
+        !expected || expected.length === 0
+          ? everyObservedDone
+          : expected.every((f) => progress[f]?.done === true);
       const pct =
         totalSum > 0 ? Math.min(100, (loadedSum / totalSum) * 100) : 0;
       return {
         totalPercent: pct,
-        allDone: everyDone,
+        allDone: allExpectedDone,
         hasTotals: anyTotal,
         totalLoaded: loadedSum,
         totalTotal: totalSum,
       };
-    }, [progress]);
+    }, [progress, expected]);
 
   return {
     progress,

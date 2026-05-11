@@ -237,6 +237,31 @@ canvas {
     }
 }
 
+/*
+ * Adds a tactile "pressed" visual to any .btn while the user is actively
+ * clicking/tapping it. Inverts the inset bevel (top/left become dark,
+ * bottom/right become light), nudges the label 2px down-right, and slightly
+ * darkens the background. No JS required: :active is held for the duration
+ * of the press on both mouse and touch.
+ */
+.btn.pressable {
+    transition:
+        transform 60ms ease-out,
+        filter 60ms ease-out;
+
+    &:active {
+        border-bottom-color: rgba(255, 255, 255, 0.5);
+        border-right-color: rgba(255, 255, 255, 0.5);
+        border-top-color: rgba(0, 0, 0, 0.5);
+        border-left-color: rgba(0, 0, 0, 0.5);
+        padding-top: calc(0.5rem + 2px);
+        padding-left: 17px;
+        padding-bottom: calc(0.5rem - 2px);
+        padding-right: 13px;
+        filter: brightness(0.9);
+    }
+}
+
 .noselect {
     user-select: none;
 }

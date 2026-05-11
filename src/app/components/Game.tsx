@@ -10,6 +10,7 @@ import {
   COMMON_ARGS,
   IWADS,
   ROOM_PATTERN,
+  withPressDelay,
 } from "../lib/game_tools";
 import { VirtualJoysticks } from "./VirtualJoysticks";
 import { useDownloadProgress, DownloadProgress } from "./ProgressBar";
@@ -75,6 +76,15 @@ export const Game = () => {
   }, []);
   const handlePrint = useDoomPrintHandler(typewriter, room, navigate);
 
+  // The set of files bootDoom will preload for this session. Declaring it
+  // here prevents the loading overlay from flickering off when the small
+  // default.cfg finishes before the WAD has even emitted its first
+  // progress event. See useDownloadProgress for the underlying reason.
+  const expectedDownloads = useMemo(
+    () => (iwad ? [IWADS[iwad].file, "default.cfg"] : undefined),
+    [iwad],
+  );
+
   const {
     onProgress: handleDownloadProgress,
     totalPercent,
@@ -82,7 +92,7 @@ export const Game = () => {
     hasTotals,
     totalLoaded,
     totalTotal,
-  } = useDownloadProgress();
+  } = useDownloadProgress(expectedDownloads);
 
   const showError = (msg: string) => {
     setError(msg);
@@ -209,16 +219,16 @@ export const Game = () => {
               />
             </div>
             <a
-              className="btn primary"
+              className="btn primary pressable"
               id="solo"
               style={{
                 display: "block",
                 width: "fit-content",
                 margin: "1rem auto",
               }}
-              onClick={() => {
+              onClick={withPressDelay(() => {
                 setView(homeOrJoin());
-              }}
+              })}
             >
               Start
             </a>
@@ -361,20 +371,21 @@ const Home = ({ onSubmit }) => {
     <>
       <div id="buttons">
         <a
-          className="btn secondary"
+          className="btn secondary pressable"
           id="multiplayer"
-          onClick={() => {
+          onClick={withPressDelay(() => {
+            console.log("yo");
             onSubmit(true);
-          }}
+          })}
         >
           Start Multiplayer
         </a>
         <a
-          className="btn primary"
+          className="btn primary pressable"
           id="solo"
-          onClick={() => {
+          onClick={withPressDelay(() => {
             onSubmit(false);
-          }}
+          })}
         >
           Play Solo
         </a>
@@ -426,10 +437,10 @@ const ChooseMap = ({ onSubmit }) => {
   return (
     <div id="text">
       <h1 className="vspace">Choose which IWAD to play</h1>
-      <a className="btn primary" onClick={() => onSubmit("doom1")}>
+      <a className="btn primary" onClick={withPressDelay(() => onSubmit("doom1"))}>
         {IWADS.doom1.label}
       </a>
-      <a className="btn secondary" onClick={() => onSubmit("doom2")}>
+      <a className="btn secondary" onClick={withPressDelay(() => onSubmit("doom2"))}>
         {IWADS.doom2.label}
       </a>
     </div>
@@ -446,7 +457,7 @@ const ChoosePet = ({ onSubmit }) => {
         <a
           className="btn tertiary"
           id="random"
-          onClick={() => setPetName(genPetName())}
+          onClick={withPressDelay(() => setPetName(genPetName()))}
         >
           {"\u21BB"}
         </a>
@@ -464,7 +475,7 @@ const ChoosePet = ({ onSubmit }) => {
         <a
           className="btn secondary"
           id="mypet"
-          onClick={petName.length ? () => onSubmit(petName) : undefined}
+          onClick={petName.length ? withPressDelay(() => onSubmit(petName)) : undefined}
         >
           Go
         </a>
@@ -480,14 +491,14 @@ const TypeOfGame = ({ onSubmit }) => {
       <a
         className="btn secondary"
         id="deathmatch"
-        onClick={() => onSubmit("deathmatch")}
+        onClick={withPressDelay(() => onSubmit("deathmatch"))}
       >
         Deathmatch
       </a>
       <a
         className="btn primary"
         id="cooperative"
-        onClick={() => onSubmit("cooperative")}
+        onClick={withPressDelay(() => onSubmit("cooperative"))}
       >
         Cooperative
       </a>
@@ -520,7 +531,14 @@ const Permalink = ({ onStart, iwad, type }) => {
 
   return (
     <div id="text">
-      {room.length && <QRCode value={permalink} />}
+      {room.length ? (
+        <QRCode value={permalink} />
+      ) : (
+        <div
+          style={{ display: "inline-block", width: 256, height: 256 }}
+          aria-hidden="true"
+        />
+      )}
       <h1 className="vspace">Share the link or the QRCode with your friends</h1>
       <h1>Players can join until you start the game</h1>
       <h1>Move to next the screen, wait for them, and</h1>
@@ -531,7 +549,7 @@ const Permalink = ({ onStart, iwad, type }) => {
           id="clip"
           className="btn primary"
           data-room={room}
-          onClick={copyPermalink}
+          onClick={withPressDelay(copyPermalink)}
         >
           Copy Permalink
         </a>
@@ -539,7 +557,7 @@ const Permalink = ({ onStart, iwad, type }) => {
           className="btn secondary"
           id="start"
           data-room={room}
-          onClick={() => onStart(room)}
+          onClick={withPressDelay(() => onStart(room))}
         >
           Next
         </a>

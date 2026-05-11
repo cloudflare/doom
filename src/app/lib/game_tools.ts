@@ -165,6 +165,29 @@ export const genPetName = (): string => {
   return `${adj} ${noun}`;
 };
 
+// Wraps an onClick handler so the user has time to see the .pressable CSS
+// press animation before the click side-effect fires. The browser still
+// dispatches the click immediately (CSS cannot delay JS events), so we
+// schedule the actual handler on a short timeout. 120ms ≈ the duration of
+// a perceived "tap": long enough for the bevel inversion to register, short
+// enough to feel responsive.
+//
+// Usage:
+//   <a className="btn primary pressable"
+//      onClick={withPressDelay(() => setView("next"))} />
+export const withPressDelay = <E extends { preventDefault?: () => void }>(
+  handler: (e: E) => void,
+  ms = 120,
+): ((e: E) => void) => {
+  return (e: E) => {
+    // For <a> elements without a real href, the default click behaviour is
+    // a no-op, but we still defensively preventDefault so the timer can't
+    // race with navigation in case a caller added href="...".
+    e.preventDefault?.();
+    window.setTimeout(() => handler(e), ms);
+  };
+};
+
 type FetchTarget = { file: string; label: string };
 
 const installFetchProgressInterceptor = (
