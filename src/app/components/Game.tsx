@@ -8,12 +8,12 @@ import {
   bootDoom,
   ENDPOINTS,
   COMMON_ARGS,
-  IWADS,
   ROOM_PATTERN,
   withPressDelay,
 } from "../lib/game_tools";
 import { VirtualJoysticks } from "./VirtualJoysticks";
 import { useDownloadProgress, DownloadProgress } from "./ProgressBar";
+import { IWADS } from "../../lib/common";
 import {
   GameFooter,
   useDoomPrintHandler,
@@ -46,6 +46,8 @@ const Monitor = ({
     </>
   );
 };
+
+const bgColors = ['primary','secondary','tertiary','quaternary','quinary','senary','septenary','octonary','nonary','denary'];
 
 export const Game = () => {
   const navigate = useNavigate();
@@ -81,7 +83,7 @@ export const Game = () => {
   // default.cfg finishes before the WAD has even emitted its first
   // progress event. See useDownloadProgress for the underlying reason.
   const expectedDownloads = useMemo(
-    () => (iwad ? [IWADS[iwad].file, "default.cfg"] : undefined),
+    () => (iwad ? [`${iwad}.wad`, "default.cfg"] : undefined),
     [iwad],
   );
 
@@ -172,12 +174,7 @@ export const Game = () => {
               xtra_args = [...xtra_args, "-connect", "1"];
             }
           }
-          const args = [
-            ...COMMON_ARGS,
-            "-iwad",
-            IWADS[iwad].file,
-            ...xtra_args,
-          ];
+          const args = [...COMMON_ARGS, "-iwad", `${iwad}.wad`, ...xtra_args];
           bootDoom(
             args,
             canvasRef.current,
@@ -437,12 +434,17 @@ const ChooseMap = ({ onSubmit }) => {
   return (
     <div id="text">
       <h1 className="vspace">Choose which IWAD to play</h1>
-      <a className="btn primary" onClick={withPressDelay(() => onSubmit("doom1"))}>
-        {IWADS.doom1.label}
-      </a>
-      <a className="btn secondary" onClick={withPressDelay(() => onSubmit("doom2"))}>
-        {IWADS.doom2.label}
-      </a>
+      {Object.keys(IWADS).map((k: string, i: number) => {
+        return (
+          <a
+            className={`btn ${bgColors[i % bgColors.length]}`}
+            key={i}
+            onClick={withPressDelay(() => onSubmit(k))}
+          >
+            {IWADS[k].label}
+          </a>
+        );
+      })}
     </div>
   );
 };
@@ -475,7 +477,9 @@ const ChoosePet = ({ onSubmit }) => {
         <a
           className="btn secondary"
           id="mypet"
-          onClick={petName.length ? withPressDelay(() => onSubmit(petName)) : undefined}
+          onClick={
+            petName.length ? withPressDelay(() => onSubmit(petName)) : undefined
+          }
         >
           Go
         </a>

@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { IWADS } from "../lib/common";
 
 export default {
   async fetch(request: Request, env: Env) {
@@ -33,7 +34,7 @@ async function handleApiRequest(request: Request, env: Env) {
 
     case "newroom": {
       let body: { iwad?: string; type?: string } = await request.json();
-      const iwad = body.iwad === "doom2" ? "doom2" : "doom1";
+      const iwad = body.iwad;
       const type = body.type === "cooperative" ? "cooperative" : "deathmatch";
       room = await createRoom(env);
       await env.router.getByName(room).setConfig({ iwad, type });
@@ -43,11 +44,13 @@ async function handleApiRequest(request: Request, env: Env) {
     case "wad": {
       // CORS-bypass proxy for remote IWADs. Emscripten's
       // FS.createPreloadedFile can't fetch the upstream GitHub URL directly
-      const upstream = IWAD_PROXY_URLS[value];
-      if (!upstream) {
+      if (
+        Object.keys(IWADS).indexOf(value) == -1 ||
+        IWADS[value].remote == undefined
+      ) {
         return jsonReply({ reason: "unknown wad" }, 404);
       }
-      const upstreamResponse = await fetch(upstream, {
+      const upstreamResponse = await fetch(IWADS[value].remote, {
         // GitHub's raw redirect chain is gzip-incompatible with some Worker
         // intermediaries; passing only the URL keeps the request minimal.
         cf: { cacheEverything: true, cacheTtl: 60 * 60 * 24 * 7 },
@@ -119,15 +122,6 @@ async function jsonReply(json: any, status: number) {
     status: status,
   });
 }
-
-// Allow-list of remote IWADs the proxy is willing to fetch. Keeping this
-// server-side prevents `/api/wad/:id` from turning into an open egress
-// proxy — a client can only request WAD ids we have explicitly catalogued.
-// Keep this in sync with IWADS in src/app/lib/game_tools.ts.
-const IWAD_PROXY_URLS: Record<string, string> = {
-  doom2:
-    "https://github.com/Akbar30Bill/DOOM_wads/raw/refs/heads/master/doom2.wad",
-};
 
 export class Router extends DurableObject<Env> {
   private sessions: any[] = [];

@@ -1,3 +1,5 @@
+import { IWADS } from "../../lib/common";
+
 export const ADJECTIVES = [
   "Grumpy",
   "Ecstatic",
@@ -84,27 +86,6 @@ export const COMMON_ARGS = [
   "-nodes",
   "4",
 ];
-
-// Catalog of supported IWADs. The `url` field is consumed by Emscripten's
-// `FS.createPreloadedFile`, which fetches it via XHR (relative URLs resolve
-// against the page origin, absolute URLs are loaded directly — provided the
-// remote sends permissive CORS headers). The third arg to chocolate-doom's
-// `-iwad` is the on-FS filename, hence `file`.
-export const IWADS = {
-  doom1: {
-    file: "doom1.wad",
-    url: "doom1.wad",
-    label: "Doom 1 (shareware)",
-  },
-  doom2: {
-    // Same-origin proxy at /api/wad/doom2 (see worker/index.ts). The
-    // upstream GitHub raw URL doesn't always honour CORS for XHR, so the
-    // Worker fetches it server-side and re-emits the bytes from our origin.
-    file: "doom2.wad",
-    url: "/api/wad/doom2",
-    label: "Doom 2 (remote)",
-  },
-};
 
 export const ROOM_PATTERN = /^[a-z0-9]+-[a-z0-9]+$/;
 
@@ -310,17 +291,19 @@ export const bootDoom = (
   }
   bootedOnce = true;
 
-  console.log("args:");
-  console.log(args);
-
   // Install the fetch wrapper *before* appending the chocolate-doom.js
   // script tag so that the bundle's first call to window.fetch (made from
   // its readAsync() helper inside FS_preloadFile) goes through our
   // progress-tracking interceptor.
   const wad = IWADS[iwad];
+  const url = wad.remote ? `/api/wad/${iwad}` : `${iwad}.wad`;
+
   const uninstallFetchInterceptor = installFetchProgressInterceptor(
     new Map<string, FetchTarget>([
-      [wad.url, { file: wad.file, label: wad.label }],
+      [
+        url,
+        { file: `${iwad}.wad`, label: wad.label },
+      ],
       ["default.cfg", { file: "default.cfg", label: "Config" }],
     ]),
     onProgress,
@@ -343,7 +326,7 @@ export const bootDoom = (
         // wrapper installed above intercepts the resulting XHR/fetch made
         // by readAsync() to emit progress events; the runtime sees a
         // perfectly normal Response and proceeds exactly as before.
-        fs.createPreloadedFile("", wad.file, wad.url, true, true);
+        fs.createPreloadedFile("", `${iwad}.wad`, url, true, true);
         fs.createPreloadedFile("", "default.cfg", "default.cfg", true, true);
       },
       onRuntimeInitialized: () => {
@@ -366,10 +349,10 @@ export const bootDoom = (
         }
       },
       print,
-      printErr: (text:string) => {
+      printErr: (text: string) => {
         console.error(text);
       },
-      setStatus: (text:string) => {
+      setStatus: (text: string) => {
         console.error(text);
       },
       monitorRunDependencies: () => {

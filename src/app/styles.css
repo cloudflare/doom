@@ -237,6 +237,69 @@ canvas {
     }
 }
 
+.btn.quaternary {
+    background: #5c00bc;
+
+    &:focus,
+    &:hover {
+        background: #7c00fc;
+    }
+}
+
+.btn.quinary {
+    background: #bc6800;
+
+    &:focus,
+    &:hover {
+        background: #fc8c00;
+    }
+}
+
+.btn.senary {
+    background: #008c8c;
+
+    &:focus,
+    &:hover {
+        background: #00bcbc;
+    }
+}
+
+.btn.septenary {
+    background: #bc0078;
+
+    &:focus,
+    &:hover {
+        background: #fc009c;
+    }
+}
+
+.btn.octonary {
+    background: #8c8c00;
+
+    &:focus,
+    &:hover {
+        background: #bcbc00;
+    }
+}
+
+.btn.nonary {
+    background: #8c3800;
+
+    &:focus,
+    &:hover {
+        background: #bc4c00;
+    }
+}
+
+.btn.denary {
+    background: #585858;
+
+    &:focus,
+    &:hover {
+        background: #787878;
+    }
+}
+
 /*
  * Adds a tactile "pressed" visual to any .btn while the user is actively
  * clicking/tapping it. Inverts the inset bevel (top/left become dark,
