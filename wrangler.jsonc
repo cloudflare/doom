@@ -38,6 +38,9 @@
   "secrets": {
     "required": ["DOOM_KEY"]
   },
+  "ai": {
+    "binding": "AI"
+  },
   // Environment specifics
   "env": {
     "production": {

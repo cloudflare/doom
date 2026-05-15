@@ -17,17 +17,33 @@ export default {
 
 async function handleApiRequest(request: Request, env: Env) {
   let url = new URL(request.url);
-  let [, method, value] = url.pathname.slice(1).split("/");
+  let [, method, value, submethod] = url.pathname.slice(1).split("/");
   let room: string | boolean = false;
+
+  // possible API calls
+  // /api/room/{room}
+  // /api/room/{room}/started
+  // /api/ws/{room}
+  // /api/ws/{room}/host
 
   switch (method) {
     case "ws":
+      room = await checkRoom(value, env);
+      if (room) {
+        return env.router.getByName(room).fetch(request);
+      } else {
+        return jsonReply({ reason: "invalid room" }, 404);
+      }
+
     case "room":
       room = await checkRoom(value, env);
-
       if (room) {
-        let routerObject = env.router.getByName(room);
-        return routerObject.fetch(request);
+        const instance = env.router.getByName(room);
+        return jsonReply(
+          submethod == "started"
+            ? await instance.setStarted()
+            : await instance.getConfig(),
+        );
       } else {
         return jsonReply({ reason: "invalid room" }, 404);
       }
@@ -39,6 +55,15 @@ async function handleApiRequest(request: Request, env: Env) {
       room = await createRoom(env);
       await env.router.getByName(room).setConfig({ iwad, type });
       return jsonReply({ room, iwad, type }, 200);
+    }
+
+    case "tts": {
+      const body: { text: string } = await request.json();
+      const result = await env.AI.run("@cf/myshell-ai/melotts", {
+        prompt: body.text,
+        lang: "en",
+      });
+      return jsonReply(result, 200);
     }
 
     case "wad": {
@@ -113,7 +138,7 @@ async function createRoom(env: Env) {
   return `${room}-${hex}`;
 }
 
-async function jsonReply(json: any, status: number) {
+async function jsonReply(json: any, status: number = 200) {
   return new Response(JSON.stringify(json), {
     headers: {
       "content-type": "application/json;charset=UTF-8",
@@ -140,54 +165,34 @@ export class Router extends DurableObject<Env> {
     this.type = config.type;
   }
 
+  async getConfig() {
+    return {
+      gameStarted: this.gameStarted,
+      gameEnded: this.gameEnded,
+      serverReady: this.serverReady,
+      iwad: this.iwad,
+      type: this.type,
+    };
+  }
+
+  async setStarted() {
+    this.gameStarted = true;
+  }
+
   async fetch(request: Request) {
     let url = new URL(request.url);
-    let [, method, value, submethod] = url.pathname.slice(1).split("/");
+    let [,,, submethod] = url.pathname.slice(1).split("/");
 
-    // possible API calls
-    // /api/room/{room}
-    // /api/room/{room}/started
-    // /api/ws/{room}
-    // /api/ws/{room}/host
-
-    switch (method) {
-      case "room":
-        var room = await checkRoom(value, this.env);
-        if (room) {
-          switch (submethod) {
-            // host can call this to signal that the game has started
-            case "started":
-              this.gameStarted = true;
-              break;
-          }
-          return jsonReply(
-            {
-              room: room,
-              gameStarted: this.gameStarted,
-              gameEnded: this.gameEnded,
-              serverReady: this.serverReady,
-              iwad: this.iwad,
-              type: this.type,
-            },
-            200,
-          );
-        } else {
-          return jsonReply({ reason: "invalid room" }, 404);
-        }
-
-      case "ws":
-        if (request.headers.get("Upgrade") != "websocket") {
-          return new Response("expected websocket", { status: 400 });
-        }
-
-        // Get the client's IP address for use with the rate limiter.
-        // let ip = request.headers.get('CF-Connecting-IP')
-
-        const [client, server] = Object.values(new WebSocketPair());
-
-        await this.handleSession(server, submethod == "host" ? true : false);
-        return new Response(null, { status: 101, webSocket: client });
+    if (request.headers.get("Upgrade") != "websocket") {
+      return new Response("expected websocket", { status: 400 });
     }
+
+    // Get the client's IP address for use with the rate limiter.
+    // let ip = request.headers.get('CF-Connecting-IP')
+    const [client, server] = Object.values(new WebSocketPair());
+
+    await this.handleSession(server, submethod == "host" ? true : false);
+    return new Response(null, { status: 101, webSocket: client });
   }
 
   async handleSession(webSocket: WebSocket, isHost: boolean) {

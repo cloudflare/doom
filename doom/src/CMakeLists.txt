@@ -154,6 +154,21 @@ endif()
 if (DEFINED EMSCRIPTEN)
     # Doom-wasm Emscripten link flags:
     #   USE_SDL=2 / USE_SDL_MIXER=2  - matches compile flags
+    #   SDL2_MIXER_FORMATS=['ogg']
+    #                                - emscripten's SDL2_mixer port ships zero
+    #                                  music decoders by default. Doom's
+    #                                  built-in music is played by the OPL
+    #                                  emulator (i_oplmusic.c + opl/opl_sdl.c)
+    #                                  which synthesises directly from the
+    #                                  WAD's GENMIDI lump and needs no
+    #                                  decoder, so we don't request the
+    #                                  port's 'mid' format -- it compiles in
+    #                                  timidity but bundles no instrument
+    #                                  patches, so MIDI playback is silent.
+    #                                  We do request 'ogg' so substitute
+    #                                  music packs (i_musicpack.c, drop OGGs
+    #                                  next to the WAD) keep working in the
+    #                                  browser. ~25 KB to the wasm.
     #   ALLOW_MEMORY_GROWTH=1        - heap can grow at runtime
     #   INITIAL_MEMORY=64MB          - large enough to load typical IWADs
     #   ASYNCIFY=1                   - lets emscripten_sleep() / OPL_Delay()
@@ -179,6 +194,6 @@ if (DEFINED EMSCRIPTEN)
     #                                  by net_websockets.c)
     #   -gsource-map / --source-map-base /  - emit a wasm sourcemap
     #   -O3                          - override the project-wide -O2 default
-    set(EM_LINK_FLAGS "${SDL_FLAGS} -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=64MB -s ASYNCIFY=1 -s EMULATE_FUNCTION_POINTER_CASTS=1 -s EXIT_RUNTIME=1 -s ASSERTIONS=0 -s STACK_OVERFLOW_CHECK=1 -s ERROR_ON_UNDEFINED_SYMBOLS=0 -s FORCE_FILESYSTEM=1 -s EXPORTED_RUNTIME_METHODS=ccall,cwrap,FS,ENV,PATH,ERRNO_CODES,callMain -s EXPORTED_FUNCTIONS=_main -lwebsocket.js -O3 -gsource-map --source-map-base /")
+    set(EM_LINK_FLAGS "${SDL_FLAGS} -s SDL2_MIXER_FORMATS=[\"ogg\"] -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=64MB -s ASYNCIFY=1 -s EMULATE_FUNCTION_POINTER_CASTS=1 -s EXIT_RUNTIME=1 -s ASSERTIONS=0 -s STACK_OVERFLOW_CHECK=1 -s ERROR_ON_UNDEFINED_SYMBOLS=0 -s FORCE_FILESYSTEM=1 -s EXPORTED_RUNTIME_METHODS=ccall,cwrap,FS,ENV,PATH,ERRNO_CODES,callMain -s EXPORTED_FUNCTIONS=_main -lwebsocket.js -O3 -gsource-map --source-map-base /")
     set_target_properties("${PROGRAM_PREFIX}doom" PROPERTIES LINK_FLAGS "${EM_LINK_FLAGS}")
 endif()

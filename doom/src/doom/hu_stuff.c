@@ -471,6 +471,7 @@ void HU_Ticker(void)
 	if ((plr->message && !message_nottobefuckedwith)
 	    || (plr->message && message_dontfuckwithme))
 	{
+	    printf("doom: 15, %s\n", plr->message);
 	    HUlib_addMessageToSText(&w_message, 0, plr->message);
 	    plr->message = 0;
 	    message_on = true;
@@ -505,7 +506,14 @@ void HU_Ticker(void)
 			    HUlib_addMessageToSText(&w_message,
 						    DEH_String(player_names[i]),
 						    w_inputbuffer[i].l.l);
-			    
+
+			    if (chat_dest[i] == HU_BROADCAST)
+			    {
+				printf("doom: 14, %s, %s\n",
+				       DEH_String(player_names[i]),
+				       w_inputbuffer[i].l.l);
+			    }
+
 			    message_nottobefuckedwith = true;
 			    message_on = true;
 			    message_counter = HU_MSGTIMEOUT;

@@ -28,7 +28,11 @@
 
 //#define OPL_DEBUG_TRACE
 
-#ifdef EMSCRIPTEN
+// Note: modern emcc only predefines __EMSCRIPTEN__, not the bare EMSCRIPTEN
+// macro that older Chocolate Doom code was guarding on. The historical "OPL
+// music deadlock fix when running under Emscripten" referenced in the
+// project README never actually compiled before this guard was renamed.
+#ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #endif
 
@@ -495,14 +499,49 @@ void OPL_Delay(uint64_t us)
 
     SDL_LockMutex(delay_data.mutex);
 
+#ifdef __EMSCRIPTEN__
+    // Doom-wasm: SDL_CondWait would block forever on Emscripten's single-
+    // threaded SDL2 build -- there's no audio thread to signal the cond, and
+    // the Mix_RegisterEffect postmix that's supposed to fire DelayCallback
+    // only runs while the implicit Web Audio context is unsuspended. The
+    // previous "fix" called SDL_CondWait *then* emscripten_sleep, but control
+    // never returned from the cond wait so the asyncify yield was unreachable
+    // and the entire main loop froze before emscripten_set_main_loop was
+    // even registered (this is what -nomusic was silently working around).
+    // The historical fix also keyed off the bare EMSCRIPTEN macro, which
+    // modern emcc no longer predefines (it now only sets __EMSCRIPTEN__) --
+    // so the fix sat in the tree as dead code for ages.
+    //
+    // Drop the mutex, yield to the browser event loop via emscripten_sleep,
+    // and re-acquire on the next iteration. The browser pumps Web Audio
+    // during the sleep; one SDL_mixer audio buffer (1024 samples @ 22050Hz
+    // ~= 46 ms) advances the OPL emulator clock by far more than the 1 ms
+    // requested by OPL_Detect, so DelayCallback typically fires after a
+    // single iteration. The iteration cap is a safety net for the case
+    // where the AudioContext remains suspended (browser autoplay policy):
+    // we eventually fall through with delay_data.finished still false,
+    // OPL_Detect will report no chip, and music degrades to silent rather
+    // than hanging the page. The native build keeps the original cond_wait.
+    //
+    // 200 iterations * emscripten_sleep(1) is at most ~200 ms of wall time
+    // when timer granularity is honoured, and a few seconds in worst-case
+    // browsers; either way, finite.
+    {
+        int opl_delay_iters = 0;
+        const int opl_delay_max = 200;
+        while (!delay_data.finished && opl_delay_iters++ < opl_delay_max)
+        {
+            SDL_UnlockMutex(delay_data.mutex);
+            emscripten_sleep(1);
+            SDL_LockMutex(delay_data.mutex);
+        }
+    }
+#else
     while (!delay_data.finished)
     {
         SDL_CondWait(delay_data.cond, delay_data.mutex);
-#ifdef EMSCRIPTEN
-        // Use async sleep to avoid locking browser main thread
-        emscripten_sleep(us / 1000);
-#endif
     }
+#endif
 
     SDL_UnlockMutex(delay_data.mutex);
 

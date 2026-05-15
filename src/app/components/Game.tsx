@@ -10,16 +10,14 @@ import {
   COMMON_ARGS,
   ROOM_PATTERN,
   withPressDelay,
-} from "../lib/game_tools";
+  jsonFetch,
+} from "../lib/tools";
 import { VirtualJoysticks } from "./VirtualJoysticks";
 import { useDownloadProgress, DownloadProgress } from "./ProgressBar";
 import { IWADS } from "../../lib/common";
-import {
-  GameFooter,
-  useDoomPrintHandler,
-  type GameFooterHandle,
-  type Typewriter,
-} from "./GameFooter";
+import { type Typewriter } from "../types";
+import { GameFooter, type GameFooterHandle } from "./GameFooter";
+import { useDoomPrintHandler } from "./DoomPrintHandler";
 import { NoWasmView, Logo } from "./Helpers";
 import QRCode from "react-qr-code";
 
@@ -47,7 +45,26 @@ const Monitor = ({
   );
 };
 
-const bgColors = ['primary','secondary','tertiary','quaternary','quinary','senary','septenary','octonary','nonary','denary'];
+const bgColors = [
+  "primary",
+  "secondary",
+  "tertiary",
+  "quaternary",
+  "quinary",
+  "senary",
+  "septenary",
+  "octonary",
+  "nonary",
+  "denary",
+];
+
+type RoomConfig = {
+  gameStarted: boolean;
+  gameEnded: boolean;
+  serverReady: boolean;
+  iwad: string;
+  type: string;
+};
 
 export const Game = () => {
   const navigate = useNavigate();
@@ -104,39 +121,28 @@ export const Game = () => {
   useEffect(() => {
     switch (view) {
       case "validating":
-        fetch(
-          `${ENDPOINTS.base}/api/room/${location.pathname.replace(/^\//, "") ?? ""}`,
-        )
-          .then((r) => r.json())
-          .then((data) => {
-            console.log(data);
-            if (!data.room) {
-              showError("Invalid room");
-              return;
-            }
+        const argRoom = location.pathname.replace(/^\//, "") ?? "";
+        jsonFetch(`${ENDPOINTS.base}/api/room/${argRoom}`)
+          .then((data: any) => {
             if (data.gameStarted) {
               showError("Game has already started, too late.");
               return;
             }
             setIwad(data.iwad);
-            setRoom(data.room);
+            setRoom(argRoom);
             setType(data.type);
             setMultiplayer(true);
             setHost(false);
             setView(data.serverReady ? "pet" : "waitingForHost");
           })
-          .catch(() => {});
+          .catch((e) => {
+            showError(e);
+          });
         break;
       case "waitingForHost": {
-        const room = location.pathname.replace(/^\//, "");
         const interval = setInterval(() => {
-          fetch(`${ENDPOINTS.base}/api/room/${room}`)
-            .then((r) => r.json())
-            .then((data) => {
-              if (!data.room) {
-                showError("Invalid room");
-                return;
-              }
+          jsonFetch(`${ENDPOINTS.base}/api/room/${room}`)
+            .then((data: any) => {
               if (data.gameStarted) {
                 showError("Game has already started, too late.");
                 return;
@@ -149,7 +155,9 @@ export const Game = () => {
                 setView("pet");
               }
             })
-            .catch(() => {});
+            .catch((e) => {
+              showError(e);
+            });
         }, 1500);
         return () => clearInterval(interval);
       }

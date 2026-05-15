@@ -106,12 +106,12 @@ EM_BOOL WebSocketMessage(int eventType, const EmscriptenWebSocketMessageEvent *e
     // e->data, e->numBytes, e->isText);
 
     net_packet_t *packet;
+    uint32_t ip = 0;
 
     packet = NET_NewPacket(e->numBytes - 4);
     memcpy(packet->data, &e->data[4], e->numBytes - 4);
     packet->len = e->numBytes - 4;
 
-    uint32_t ip = 0;
     ip = ip | *(&e->data[3]) << 24;
     ip = ip | *(&e->data[2]) << 16;
     ip = ip | *(&e->data[1]) << 8;
@@ -125,6 +125,8 @@ EM_BOOL WebSocketMessage(int eventType, const EmscriptenWebSocketMessageEvent *e
 static boolean InitWebSockets(void)
 {
     int wss;
+    uint16_t readyState = 0;
+    int retries = 6;
 
     if (inittedWebSockets == true) {
         return (true);
@@ -150,8 +152,6 @@ static boolean InitWebSockets(void)
         emscripten_websocket_set_onerror_callback(websocket, (void *)44, WebSocketError);
         emscripten_websocket_set_onmessage_callback(websocket, (void *)45, WebSocketMessage);
 
-        uint16_t readyState = 0;
-        int retries = 6;
         do {
             emscripten_websocket_get_ready_state(websocket, &readyState);
             emscripten_sleep(1000);
@@ -188,9 +188,11 @@ static uint32_t to_ip;
 
 static boolean NET_Websockets_InitServer(void)
 {
+    char *wspacket;
+
     if (InitWebSockets() == false) return false;
     WebsocketsQueueInit(&client_queue);
-    char *wspacket = malloc(8);
+    wspacket = malloc(8);
     to_ip = 0;
     memcpy(&wspacket[0], &to_ip, 4);       // to
     memcpy(&wspacket[4], &instanceUID, 4); // from
@@ -201,15 +203,18 @@ static boolean NET_Websockets_InitServer(void)
 
 static void NET_Websockets_SendPacket(net_addr_t *addr, net_packet_t *packet)
 {
+    char *wspacket;
+    int r;
+
     if (InitWebSockets() == false) return;
-    char *wspacket = malloc(packet->len + 8);
+    wspacket = malloc(packet->len + 8);
 
     if (addr->handle) {
         to_ip = (*(uint32_t *)(addr->handle));
         memcpy(&wspacket[0], &to_ip, 4);       // to
         memcpy(&wspacket[4], &instanceUID, 4); // from
         memcpy(&wspacket[8], packet->data, packet->len);
-        int r = emscripten_websocket_send_binary(websocket, wspacket, packet->len + 8);
+        r = emscripten_websocket_send_binary(websocket, wspacket, packet->len + 8);
         if (r < 0) {
             printf("doom: 6, failed to send ws packet, reconnecting");
             inittedWebSockets = false;
@@ -252,7 +257,7 @@ static boolean NET_Websockets_RecvPacket(net_addr_t **addr, net_packet_t **packe
 
     while ((popped = WebsocketsQueuePop(&client_queue)) != NULL) {
         if (popped->packet->len >= 5 && memcmp(popped->packet->data, "doom:", 5) == 0) {
-            printf("%.*s\n", popped->packet->len, (char *)popped->packet->data);
+            printf("%.*s\n", (int)popped->packet->len, (char *)popped->packet->data);
             NET_FreePacket(popped->packet);
             continue;
         }

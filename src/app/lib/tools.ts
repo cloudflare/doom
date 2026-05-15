@@ -1,84 +1,20 @@
-import { IWADS } from "../../lib/common";
-
-export const ADJECTIVES = [
-  "Grumpy",
-  "Ecstatic",
-  "Surly",
-  "Prepared",
-  "Crafty",
-  "Alert",
-  "Sluggish",
-  "Testy",
-  "Reluctant",
-  "Languid",
-  "Passive",
-  "Pacifist",
-  "Aggressive",
-  "Hostile",
-  "Bubbly",
-  "Giggly",
-  "Laughing",
-  "Crying",
-  "Frowning",
-  "Torpid",
-  "Lethargic",
-  "Manic",
-  "Patient",
-  "Protective",
-  "Philosophical",
-  "Enquiring",
-  "Debating",
-  "Furious",
-  "Laid-Back",
-  "Easy-Going",
-  "Cromulent",
-  "Excitable",
-  "Tired",
-  "Exhausted",
-  "Ruminating",
-  "Redundant",
-  "Sporty",
-  "Ginger",
-  "Scary",
-  "Posh",
-  "Baby",
-];
-
-export const NOUNS = [
-  "Frad",
-  "Cacodemon",
-  "Arch-Vile",
-  "Cyberdemon",
-  "Imp",
-  "Demon",
-  "Mancubus",
-  "Arachnotron",
-  "Baron",
-  "Knight",
-  "Revenant",
-  "Ettin",
-  "Maulotaur",
-  "Centaur",
-  "Afrit",
-  "Serpent",
-  "Disciple",
-  "Gargoyle",
-  "Golem",
-  "Lich",
-  "Sentinel",
-  "Acolyte",
-  "Templar",
-  "Reaver",
-  "Spectre",
-];
+import { IWADS, ADJECTIVES, NOUNS } from "../../lib/common";
 
 // Args common to every chocolate-doom invocation. The `-iwad <file>` pair is
 // appended by the caller once the user has picked an IWAD on the
 // `chooseIwad` screen (see IWADS below).
+//
+// We used to pass `-nomusic` here because the upstream OPL_Delay() routine
+// deadlocked the wasm main loop on SDL_CondWait waiting for a postmix
+// callback that never fired under Emscripten's single-threaded SDL2 (see
+// doom/opl/opl.c). That wait has been rewritten to yield via
+// emscripten_sleep with an iteration cap, so OPL emulation now drives Web
+// Audio normally (synthesised from the WAD's GENMIDI lump, no external
+// soundfonts/patches required). Removing -nomusic lets the WASM build play
+// the original Doom soundtrack.
 export const COMMON_ARGS = [
   "-window",
   "-nogui",
-  "-nomusic",
   "-config",
   "default.cfg",
   "-servername",
@@ -146,24 +82,11 @@ export const genPetName = (): string => {
   return `${adj} ${noun}`;
 };
 
-// Wraps an onClick handler so the user has time to see the .pressable CSS
-// press animation before the click side-effect fires. The browser still
-// dispatches the click immediately (CSS cannot delay JS events), so we
-// schedule the actual handler on a short timeout. 120ms ≈ the duration of
-// a perceived "tap": long enough for the bevel inversion to register, short
-// enough to feel responsive.
-//
-// Usage:
-//   <a className="btn primary pressable"
-//      onClick={withPressDelay(() => setView("next"))} />
 export const withPressDelay = <E extends { preventDefault?: () => void }>(
   handler: (e: E) => void,
   ms = 120,
 ): ((e: E) => void) => {
   return (e: E) => {
-    // For <a> elements without a real href, the default click behaviour is
-    // a no-op, but we still defensively preventDefault so the timer can't
-    // race with navigation in case a caller added href="...".
     e.preventDefault?.();
     window.setTimeout(() => handler(e), ms);
   };
@@ -233,10 +156,6 @@ const installFetchProgressInterceptor = (
       }
     }
 
-    // Concatenate chunks into one contiguous buffer and hand it back to the
-    // bundle as a synthesized Response. The bundle's readAsync() helper
-    // immediately calls .arrayBuffer() on this, which resolves with our
-    // already-buffered bytes — no second copy of the network traffic.
     const buf = new Uint8Array(loaded);
     let offset = 0;
     for (const chunk of chunks) {
@@ -266,11 +185,6 @@ const installFetchProgressInterceptor = (
 };
 
 // Boot Chocolate Doom (classic Emscripten bundle).
-//
-// The /chocolate-doom.js script auto-runs on load and reads its config from
-// the pre-existing global `Module`. The script can only be initialised once
-// per page, so a second boot in the same session forces a hard reload — this
-// matches the original silentspacemarine.com behaviour.
 
 let bootedOnce = false;
 
@@ -282,28 +196,17 @@ export const bootDoom = (
   onProgress?: any,
 ): Promise<void> => {
   if (bootedOnce) {
-    // The classic Emscripten bundle has already auto-run; we cannot
-    // re-initialise it. Force a fresh page so the user can start over.
     window.location.reload();
-    return new Promise<void>(() => {
-      /* never resolves; reload is in flight */
-    });
+    return new Promise<void>(() => {});
   }
   bootedOnce = true;
 
-  // Install the fetch wrapper *before* appending the chocolate-doom.js
-  // script tag so that the bundle's first call to window.fetch (made from
-  // its readAsync() helper inside FS_preloadFile) goes through our
-  // progress-tracking interceptor.
   const wad = IWADS[iwad];
   const url = wad.remote ? `/api/wad/${iwad}` : `${iwad}.wad`;
 
   const uninstallFetchInterceptor = installFetchProgressInterceptor(
     new Map<string, FetchTarget>([
-      [
-        url,
-        { file: `${iwad}.wad`, label: wad.label },
-      ],
+      [url, { file: `${iwad}.wad`, label: wad.label }],
       ["default.cfg", { file: "default.cfg", label: "Config" }],
     ]),
     onProgress,
@@ -322,10 +225,6 @@ export const bootDoom = (
           );
           return;
         }
-        // Same calls as the original (working) boot path. The fetch
-        // wrapper installed above intercepts the resulting XHR/fetch made
-        // by readAsync() to emit progress events; the runtime sees a
-        // perfectly normal Response and proceeds exactly as before.
         fs.createPreloadedFile("", `${iwad}.wad`, url, true, true);
         fs.createPreloadedFile("", "default.cfg", "default.cfg", true, true);
       },
@@ -338,9 +237,6 @@ export const bootDoom = (
           return;
         }
         try {
-          // All preloads (and therefore all matching fetch() calls) have
-          // happened by the time onRuntimeInitialized fires, so it's safe
-          // to restore the original fetch before handing control to Doom.
           uninstallFetchInterceptor();
           main(args);
           resolve();
@@ -381,3 +277,48 @@ export const bootDoom = (
     document.head.appendChild(script);
   });
 };
+
+// Thrown when the HTTP response status is not 200.
+export class HttpStatusError extends Error {
+  status: number;
+  response: Response;
+  constructor(response: Response) {
+    super(`HTTP ${response.status} ${response.statusText}`);
+    this.name = "HttpStatusError";
+    this.status = response.status;
+    this.response = response;
+  }
+}
+
+// Thrown when the response body cannot be parsed as JSON.
+export class InvalidJsonError extends Error {
+  cause?: unknown;
+  constructor(cause?: unknown) {
+    super("Response body is not valid JSON");
+    this.name = "InvalidJsonError";
+    this.cause = cause;
+  }
+}
+
+export async function jsonFetch<T = unknown>(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<T> {
+  const response = await fetch(input, init);
+  if (response.status !== 200) {
+    throw new HttpStatusError(response);
+  }
+  let text: string;
+  try {
+    text = await response.text();
+  } catch (err) {
+    throw new InvalidJsonError(err);
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch (err) {
+    throw new InvalidJsonError(err);
+  }
+}
+
+

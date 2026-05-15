@@ -1,13 +1,6 @@
 import type { RefObject } from "react";
 
-// ---------------------------------------------------------------------------
-// Emscripten / chocolate-doom (loaded from /chocolate-doom.js, classic
-// non-MODULARIZE build). The bundle reads a pre-existing global `Module`
-// for its config and auto-runs as soon as it loads, attaching helpers
-// (FS, callMain, ...) onto that same object once initialised.
-//
-// Only the surface we touch from game_tools.ts is typed here.
-// ---------------------------------------------------------------------------
+export type Typewriter = (msg: string | string[]) => void;
 
 export type EmscriptenFS = {
   createPreloadedFile: (
