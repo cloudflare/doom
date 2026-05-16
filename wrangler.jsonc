@@ -47,12 +47,46 @@
       "route": {
         "pattern": "silentspacemarine.com",
         "custom_domain": true
+      },
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "router",
+            "class_name": "Router"
+          }
+        ]
+      },
+      "secrets": {
+        "required": ["DOOM_KEY"]
+      },
+      "ai": {
+        "binding": "AI"
+      },
+      "version_metadata": {
+        "binding": "CF_VERSION_METADATA"
       }
     },
     "staging": {
       "route": {
         "pattern": "dev.silentspacemarine.com",
         "custom_domain": true
+      },
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "router",
+            "class_name": "Router"
+          }
+        ]
+      },
+      "secrets": {
+        "required": ["DOOM_KEY"]
+      },
+      "ai": {
+        "binding": "AI"
+      },
+      "version_metadata": {
+        "binding": "CF_VERSION_METADATA"
       }
     }
   }

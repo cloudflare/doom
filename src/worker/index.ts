@@ -59,11 +59,22 @@ async function handleApiRequest(request: Request, env: Env) {
 
     case "tts": {
       const body: { text: string } = await request.json();
-      const result = await env.AI.run("@cf/myshell-ai/melotts", {
-        prompt: body.text,
-        lang: "en",
+      // @cf/deepgram/aura-2-en returns a ReadableStream of MP3 bytes at
+      // runtime, even though the generated binding type declares `string`.
+      // Stream the audio straight to the client instead of base64-encoding
+      // it through JSON.
+      const result = (await env.AI.run("@cf/deepgram/aura-2-en", {
+        text: body.text,
+        speaker: "andromeda",
+      })) as unknown as ReadableStream<Uint8Array>;
+      return new Response(result, {
+        status: 200,
+        headers: {
+          "content-type": "audio/mpeg",
+          "cache-control": "no-store",
+          "Access-Control-Allow-Origin": "*",
+        },
       });
-      return jsonReply(result, 200);
     }
 
     case "wad": {
@@ -181,7 +192,7 @@ export class Router extends DurableObject<Env> {
 
   async fetch(request: Request) {
     let url = new URL(request.url);
-    let [,,, submethod] = url.pathname.slice(1).split("/");
+    let [, , , submethod] = url.pathname.slice(1).split("/");
 
     if (request.headers.get("Upgrade") != "websocket") {
       return new Response("expected websocket", { status: 400 });

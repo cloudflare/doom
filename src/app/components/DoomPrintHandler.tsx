@@ -1,7 +1,4 @@
-import {
-  useCallback,
-  useRef,
-} from "react";
+import { useCallback, useRef } from "react";
 import type { NavigateFunction } from "react-router-dom";
 import type { Typewriter } from "../types";
 import { ENDPOINTS } from "../lib/tools";
@@ -11,40 +8,57 @@ export const useDoomPrintHandler = (
   room: string,
   navigate: NavigateFunction,
 ): ((text: string) => void) => {
-  // FIFO queue of strings still waiting to be spoken, plus a flag that
-  // guarantees only one drain loop runs at a time. Refs (not state) so
-  // mutations don't trigger re-renders and the closures below always see
-  // the current values.
-  const ttsQueue = useRef<string[]>([]);
+  // FIFO queue of items still waiting to be spoken
+  const ttsQueue = useRef<{ text: string; cache: boolean }[]>([]);
   const ttsDraining = useRef(false);
+  // Dedupe identical TTS requests fired within a short window.
+  const ttsLastText = useRef<string | null>(null);
+  const ttsLastAt = useRef(0);
+  const TTS_DEDUPE_WINDOW_MS = 4000;
+  // Client-side cache of synthesised MP3 blobs keyed by source text.
+  const ttsCache = useRef<Map<string, Blob>>(new Map());
+  const TTS_CACHE_MAX_ENTRIES = 64;
 
   const drainTTS = useCallback(async () => {
     try {
       while (ttsQueue.current.length > 0) {
-        const text = ttsQueue.current.shift();
-        if (!text) continue;
+        const item = ttsQueue.current.shift();
+        if (!item) continue;
+        const { text, cache } = item;
         try {
-          const res = await fetch(`${ENDPOINTS.base}/api/tts`, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ text }),
-          });
-          if (!res.ok) {
-            console.warn(`tts: HTTP ${res.status}`);
-            continue;
+          let blob: Blob | undefined = ttsCache.current.get(text);
+          if (!blob) {
+            const res = await fetch(`${ENDPOINTS.base}/api/tts`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ text }),
+            });
+            if (!res.ok) {
+              console.warn(`tts: HTTP ${res.status}`);
+              continue;
+            }
+            // Worker streams MP3 bytes back (Workers AI ReadableStream
+            // piped through). Consume as a Blob and play it directly.
+            const audioBlob = await res.blob();
+            if (audioBlob.size === 0) {
+              console.warn("tts: empty audio response");
+              continue;
+            }
+            blob =
+              audioBlob.type && audioBlob.type !== ""
+                ? audioBlob
+                : new Blob([audioBlob], { type: "audio/mpeg" });
+            if (cache) {
+              // FIFO eviction once we hit the cap.
+              if (ttsCache.current.size >= TTS_CACHE_MAX_ENTRIES) {
+                const oldest = ttsCache.current.keys().next().value;
+                if (oldest !== undefined) ttsCache.current.delete(oldest);
+              }
+              ttsCache.current.set(text, blob);
+            }
+          } else {
+            console.log(`using Workers AI cache for ${text}`);
           }
-          const data = (await res.json()) as { audio?: string };
-          if (!data.audio) {
-            console.warn("tts: no audio in response");
-            continue;
-          }
-          // base64 -> Uint8Array
-          const binary = atob(data.audio);
-          const bytes = new Uint8Array(binary.length);
-          for (let i = 0; i < binary.length; i++) {
-            bytes[i] = binary.charCodeAt(i);
-          }
-          const blob = new Blob([bytes], { type: "audio/mpeg" });
           const url = URL.createObjectURL(blob);
           await new Promise<void>((resolve) => {
             const audio = new Audio(url);
@@ -70,8 +84,21 @@ export const useDoomPrintHandler = (
   }, []);
 
   const enqueueTTS = useCallback(
-    (text: string) => {
-      ttsQueue.current.push(text);
+    (text: string, cache: boolean = false) => {
+      const now = Date.now();
+      if (
+        ttsLastText.current === text &&
+        now - ttsLastAt.current < TTS_DEDUPE_WINDOW_MS
+      ) {
+        // Same text fired again within the dedupe window -- ignore the
+        // repeat and refresh the timestamp so a steady stream of repeats
+        // keeps the suppression alive.
+        ttsLastAt.current = now;
+        return;
+      }
+      ttsLastText.current = text;
+      ttsLastAt.current = now;
+      ttsQueue.current.push({ text, cache });
       if (!ttsDraining.current) {
         ttsDraining.current = true;
         void drainTTS();
@@ -128,6 +155,16 @@ export const useDoomPrintHandler = (
             const message = parts.slice(2).join(",").trim();
             if (name || message) {
               enqueueTTS(`${name} says: ${message}`);
+            }
+            msg = false;
+            break;
+          }
+          case 15: {
+            // doom: 15, <system message>
+            // Message may itself contain commas, so rejoin the tail.
+            const sys = parts.slice(1).join(",").trim();
+            if (sys) {
+              enqueueTTS(sys, true);
             }
             msg = false;
             break;

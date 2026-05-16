@@ -18,6 +18,7 @@ Features and changelog since the [initial](https://blog.cloudflare.com/doom-mult
 - Fixed a Wasm OPL music [deadlock](doom/opl/opl.c) and added music support. 🎸 🆕
 - Over-the-Internet multiplayer support using WebSocket TCP connections and a Durable Object for communication and routing between clients.
   - Durable Object router: migrated away from fetch to [invoke RPC methods](https://developers.cloudflare.com/durable-objects/best-practices/create-durable-object-stubs-and-send-requests/#invoke-rpc-methods). 🆕
+- Uses Workers AI [Text-to-Spech models](https://developers.cloudflare.com/workers-ai/models/?tasks=Text-to-Speech) to "speak" the multi-player and system game messages. 💬 🆕
 
 ## Running locally and deploying
 
