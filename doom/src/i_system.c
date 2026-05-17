@@ -256,6 +256,13 @@ void I_Quit (void)
 {
     atexit_listentry_t *entry;
 
+    // Notify the host page that the game is quitting to DOS so it can
+    // navigate back to the initial screen. Emitted before SDL_Quit and
+    // the emscripten teardown below to make sure the line reaches the
+    // stdout handler while the runtime is still alive.
+    printf("doom: 16, game quit\n");
+    fflush(stdout);
+
     // Run through all exit functions
  
     entry = exit_funcs; 

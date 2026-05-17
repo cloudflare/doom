@@ -1,5 +1,12 @@
 import type { ReactNode, RefObject } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate } from "react-router-dom";
 import {
   hasWebAssembly,
@@ -16,7 +23,8 @@ import { VirtualJoysticks } from "./VirtualJoysticks";
 import { useDownloadProgress, DownloadProgress } from "./ProgressBar";
 import { IWADS } from "../../lib/common";
 import { type Typewriter } from "../types";
-import { GameFooter, type GameFooterHandle } from "./GameFooter";
+import { GameTypewriter, type GameTypewriterHandle } from "./Typewriter";
+import { Products } from "./Products";
 import { useDoomPrintHandler } from "./DoomPrintHandler";
 import { NoWasmView, Logo } from "./Helpers";
 import QRCode from "react-qr-code";
@@ -24,20 +32,21 @@ import QRCode from "react-qr-code";
 const Monitor = ({
   children,
   canvasRef,
-  footerRef,
+  typewriterRef,
   joysticksActive,
 }: {
   children: ReactNode;
   canvasRef: RefObject<HTMLCanvasElement | null>;
-  footerRef: RefObject<GameFooterHandle | null>;
+  typewriterRef: RefObject<GameTypewriterHandle | null>;
   joysticksActive: boolean;
 }) => {
   return (
     <>
       <div id="container">
         <div id="monitor" style={{ display: "block" }}>
+          <GameTypewriter ref={typewriterRef} />
           <div id="monitorscreen">{children}</div>
-          <GameFooter ref={footerRef} />
+          <Products />
         </div>
       </div>
       <VirtualJoysticks canvasRef={canvasRef} active={joysticksActive} />
@@ -69,7 +78,7 @@ type RoomConfig = {
 export const Game = () => {
   const navigate = useNavigate();
   const canvasRef = useRef(null);
-  const footerRef = useRef(null);
+  const typewriterRef = useRef(null);
   const [multiplayer, setMultiplayer] = useState(false);
   const [pet, setPet] = useState("");
   const [error, setError] = useState("");
@@ -91,7 +100,7 @@ export const Game = () => {
   });
 
   const typewriter = useCallback<Typewriter>((msg) => {
-    footerRef.current?.typewriter(msg);
+    typewriterRef.current?.typewriter(msg);
   }, []);
   const handlePrint = useDoomPrintHandler(typewriter, room, navigate);
 
@@ -199,7 +208,7 @@ export const Game = () => {
 
   const monitorProps = {
     canvasRef,
-    footerRef,
+    typewriterRef,
     joysticksActive: view === "game",
   };
 
@@ -444,13 +453,15 @@ const ChooseMap = ({ onSubmit }) => {
       <h1 className="vspace">Choose which IWAD to play</h1>
       {Object.keys(IWADS).map((k: string, i: number) => {
         return (
-          <a
-            className={`btn ${bgColors[i % bgColors.length]}`}
-            key={i}
-            onClick={withPressDelay(() => onSubmit(k))}
-          >
-            {IWADS[k].label}
-          </a>
+          <Fragment key={i}>
+            {i === 2 && <br />}
+            <a
+              className={`btn ${bgColors[i % bgColors.length]}`}
+              onClick={withPressDelay(() => onSubmit(k))}
+            >
+              {IWADS[k].label}
+            </a>
+          </Fragment>
         );
       })}
     </div>
@@ -544,7 +555,9 @@ const Permalink = ({ onStart, iwad, type }) => {
   return (
     <div id="text">
       {room.length ? (
-        <QRCode value={permalink} />
+        <div className="qrcode">
+          <QRCode bgColor="#c8470f" fgColor="#ffffff" value={permalink} />
+        </div>
       ) : (
         <div
           style={{ display: "inline-block", width: 256, height: 256 }}

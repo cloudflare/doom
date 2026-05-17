@@ -1,11 +1,11 @@
-import { GameFooter } from "./GameFooter";
+import { GameTypewriter } from "./Typewriter";
 
 export const NoWasmView = () => (
   <div id="container">
     <div id="monitor" style={{ display: "block" }}>
       <div id="monitorscreen">
         <div id="menu">
-          <div id="logo" className="vspace" />
+          <div id="logo" />
           <div id="text">
             <h1 className="vspace">Your browser has no WebAssembly Support</h1>
             <h1 className="vspace">
@@ -14,11 +14,11 @@ export const NoWasmView = () => (
           </div>
         </div>
       </div>
-      <GameFooter />
+      <GameTypewriter />
     </div>
   </div>
 );
 
 export const Logo = () => {
-  return <div id="logo" className="vspace" />;
+  return <div id="logo" />;
 };

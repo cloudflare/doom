@@ -1,4 +1,5 @@
 # List of things to do
 
-- Handle quiting the game (use the stdout protocol to capture)
 - New Cloudflare Workers design 
+- Store level scores in a database, compare to average
+- Speak an AI summary when you finish the level

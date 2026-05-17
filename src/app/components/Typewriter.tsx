@@ -9,17 +9,17 @@ import {
 } from "react";
 import type { Typewriter } from "../types";
 
-// Imperative handle exposed by <GameFooter ref={…} />.
-export type GameFooterHandle = {
+// Imperative handle exposed by <GameTypewriter ref={…} />.
+export type GameTypewriterHandle = {
   typewriter: Typewriter;
 };
 
-type GameFooterProps = {
-  ref?: Ref<GameFooterHandle>;
+type GameTypewriterProps = {
+  ref?: Ref<GameTypewriterHandle>;
 };
 
-export const GameFooter: FC<GameFooterProps> = ({ ref }) => {
-  const footerRef = useRef<HTMLDivElement>(null);
+export const GameTypewriter: FC<GameTypewriterProps> = ({ ref }) => {
+  const typewriterRef = useRef<HTMLDivElement>(null);
   const [messages, setMessages] = useState<string[]>([]);
   const [index, setIndex] = useState<number>(0);
 
@@ -39,10 +39,10 @@ export const GameFooter: FC<GameFooterProps> = ({ ref }) => {
     return () => window.clearTimeout(t);
   }, [messages, index]);
 
-  // Restart the CSS "writer" animation on each footer update by toggling the
+  // Restart the CSS "writer" animation on each typewriter  update by toggling the
   // class and forcing a reflow in between.
   useEffect(() => {
-    const f = footerRef.current;
+    const f = typewriterRef.current;
     if (!f) return;
     f.classList.remove("writer");
     // force reflow so the animation restarts
@@ -52,13 +52,12 @@ export const GameFooter: FC<GameFooterProps> = ({ ref }) => {
 
   return (
     <div
-      id="footer"
-      ref={footerRef}
+      id="typewriter"
+      ref={typewriterRef}
       className="writer"
       dangerouslySetInnerHTML={{ __html: messages[index] ?? "" }}
     />
   );
 };
 
-GameFooter.displayName = "GameFooter";
-
+GameTypewriter.displayName = "GameTypewriter";

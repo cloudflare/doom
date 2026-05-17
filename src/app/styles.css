@@ -27,21 +27,33 @@ html {
 }
 
 body {
-    background-color: #111;
+    background-color: #e8672f;
     margin: 0;
     padding: 2ch;
     /* vietnamese */
 }
 
+.bg-video {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    object-fit: cover;
+    z-index: -1;
+    pointer-events: none;
+}
+
 #logo {
     padding-top: 60px;
-    background-color: black;
+    background-color: #2d0a00;
     background-image: url("/retro.png");
     background-repeat: no-repeat;
     background-size: 320px 200px;
     width: 320px;
     height: 200px;
     margin: auto;
+    margin-top: 60px;
+    margin-bottom: 40px;
 }
 
 #mobile {
@@ -94,35 +106,25 @@ h1 a {
     margin: auto;
 }
 
+.qrcode {
+  padding-top: 30px;
+}
+
 #monitor {
-    background: #000;
+    background: #c8470f;
     position: relative;
-    border-top: 3px solid #444;
-    margin: 5%;
-    padding: 2% 2% 4% 2%;
+    border-bottom: 3px solid #4d2a20;
+    border-right: 3px solid #4d2a20;
+    margin: 2%;
+    padding: 0.5% 2% 1% 2%;
     border-radius: 10px;
-    border-bottom-left-radius: 50% 2%;
-    border-bottom-right-radius: 50% 2%;
     transition: margin-right 1s;
     display: none;
 }
 
-#monitor:after {
-    content: "";
-    display: block;
-    position: absolute;
-    bottom: 3%;
-    left: 36%;
-    height: 0.5%;
-    width: 28%;
-    background: #666;
-    border-radius: 20%;
-    box-shadow: 0 0 3px 0 white;
-}
-
 #monitorscreen {
     position: relative;
-    background-color: #000;
+    background-color: #2d0a00;
     background-size: cover;
     background-position: top center;
     height: 0;
@@ -131,15 +133,6 @@ h1 a {
     overflow: hidden;
 }
 
-/* Make the canvas fill #monitorscreen regardless of its width/height
-   attributes. Otherwise, when chocolate-doom's SDL_CreateWindow sets
-   canvas.width/canvas.height to 800x600 *after* the canvas has already
-   been laid out (the script loads asynchronously in the React version),
-   the canvas line-box ends up slightly taller than its aspect-ratio'd
-   parent and the bottom of the game gets clipped by overflow:hidden.
-   A browser resize re-runs layout (and triggers SDL's
-   SDL_WINDOWEVENT_RESIZED → SDL_SetWindowSize), which is why resizing
-   "fixes" it until you reload. */
 #monitorscreen > canvas {
     position: absolute;
     inset: 0;
@@ -329,23 +322,69 @@ canvas {
     user-select: none;
 }
 
-#footer {
+#products {
+    color: #efefef;
+    margin: auto;
+    width: 100%;
+    text-transform: uppercase;
+    background-color: #c8470f;
+    font-size: 24px;
+    overflow: hidden;
+    position: relative;
+    padding: 5px 8px 0;
+    min-height: 1.2em;
+    display: flex;
+    flex-wrap: nowrap;
+    justify-content: space-evenly;
+    align-items: center;
+    gap: 8px;
+    box-sizing: border-box;
+}
+
+.product {
+    font-size: 13px;
+    display: inline-flex;
+    align-items: center;
+    text-align: left;
+    flex: 0 0 auto;
+}
+
+.product-lines {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    margin-left: 2px;
+}
+
+.product-lines p {
+    margin: 0;
+    line-height: 0.7;
+
+}
+
+#typewriter {
     color: white;
     text-align: center;
     margin: auto;
     width: auto;
     text-transform: uppercase;
-    background-color: #000;
-    color: #d75810;
+    background-color: #c8470f;
+    color: #efefef;
     font-size: 24px;
     white-space: nowrap;
     overflow: hidden;
     position: relative;
     padding-top: 0px;
+    min-height: 1.2em;
 }
 
 .writer {
     animation: animated-text 2s steps(30, end) 1s 1 normal both;
+}
+
+#typewriter:empty {
+    animation: none;
+    width: 100%;
 }
 
 @keyframes animated-text {
@@ -400,8 +439,11 @@ input[type="text"] {
     .vspace {
         margin-top: 5px !important;
     }
-    #footer {
+    #typewriter {
         font-size: 12px;
+    }
+    .product-lines {
+        display: none;
     }
     #text {
         padding-top: 5px;
@@ -439,6 +481,9 @@ input[type="text"] {
     html {
         font-family: "VT323", monospace;
         font-size: 8px;
+    }
+    .product-lines {
+        display: none;
     }
     #container {
         display: flex;
@@ -479,7 +524,7 @@ input[type="text"] {
     .vspace {
         margin-top: 5px !important;
     }
-    #footer {
+    #typewriter {
         font-size: 14px;
     }
     #text {

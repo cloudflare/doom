@@ -169,6 +169,16 @@ export const useDoomPrintHandler = (
             msg = false;
             break;
           }
+          case 16:
+            // doom: 16, game quit -- the WASM runtime is tearing itself
+            // down via emscripten_force_exit() right after emitting this.
+            // Both `/` and `/:room` render the same <Game/>, so a plain
+            // navigate() would keep the existing component mounted with
+            // stale (now-dead) state. Force a full page reload to `/` so
+            // React, the canvas, and any sockets reset cleanly.
+            msg = false;
+            window.location.replace("/");
+            break;
           default:
             msg = (rawMsg ?? "").trim();
             break;

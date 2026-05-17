@@ -223,6 +223,7 @@ doom: 12, client '%s' timed out and disconnected
 doom: 13, host disconnected
 doom: 14, {player name}, {text message}
 doom: 15, {system message}
+doom: 16, game quit
 ```
 
 ## Third-party Assets
