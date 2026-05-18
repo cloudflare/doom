@@ -21,6 +21,7 @@
     "@eslint/js": "9.29.0",
     "@headlessui/react": "^2.2.9",
     "@headlessui/tailwindcss": "^0.2.2",
+    "@mcp-b/webmcp-polyfill": "^2.3.2",
     "@tailwindcss/forms": "^0.5.10",
     "@tailwindcss/typography": "^0.5.19",
     "@tailwindcss/vite": "^4.1.13",
@@ -39,6 +40,7 @@
     "tailwindcss": "^4.1.13",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.42.0",
+    "usewebmcp": "^2.3.2",
     "vite": "^7.0.0",
     "vitest": "^3.2.4",
     "wrangler": "^4.71.0"

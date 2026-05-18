@@ -9,6 +9,12 @@ import {
 } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  useChooseIwadTool,
+  useHomeTool,
+  InGameTools,
+  useTypeOfGameTool,
+} from "../lib/webmcp";
+import {
   hasWebAssembly,
   isMobile,
   genPetName,
@@ -73,6 +79,64 @@ type RoomConfig = {
   serverReady: boolean;
   iwad: string;
   type: string;
+};
+
+// Mounted only on the `view === "game"` screen so the WebMCP in-game tools
+// (press_key, choose_skill, screenshot, …) are registered exactly while the
+// canvas is live. The canvas itself is rendered the same way it always was —
+// see comment on the <canvas> element below.
+const GameCanvas = ({
+  canvasRef,
+  visible,
+  iwadLabel,
+  downloadsDone,
+  totalPercent,
+  hasTotals,
+  totalLoaded,
+  totalTotal,
+}: {
+  canvasRef: RefObject<HTMLCanvasElement | null>;
+  visible: boolean;
+  iwadLabel: string;
+  downloadsDone: boolean;
+  totalPercent: number;
+  hasTotals: boolean;
+  totalLoaded: number;
+  totalTotal: number;
+}) => {
+  return (
+    <>
+      {/* InGameTools is itself a component: it polls the engine's
+          screen-kind and mounts only the WebMCP tools that make sense
+          for that screen (menu vs playing vs automap ...). Lives inside
+          GameCanvas so its lifetime matches the canvas's. */}
+      <InGameTools />
+      {/* Canvas is always mounted AND visible from the very first render so
+          SDL_CreateWindow (called during chocolate-doom's startup) can
+          measure its computed dimensions from the surrounding
+          #monitorscreen layout. Hiding it with `display: none` causes SDL
+          to capture a 0x0 framebuffer and the game renders nothing even
+          after the canvas is later revealed. The DownloadProgress
+          component sits on top as an absolutely-positioned overlay (see
+          ProgressBar.tsx) while the WAD streams in. */}
+      <canvas
+        id="canvas"
+        ref={canvasRef}
+        onContextMenu={(e) => e.preventDefault()}
+        tabIndex={-1}
+        style={{ display: visible ? "" : "none" }}
+      />
+      {!downloadsDone && (
+        <DownloadProgress
+          iwadLabel={iwadLabel}
+          totalPercent={totalPercent}
+          hasTotals={hasTotals}
+          totalLoaded={totalLoaded}
+          totalTotal={totalTotal}
+        />
+      )}
+    </>
+  );
 };
 
 export const Game = () => {
@@ -339,30 +403,16 @@ export const Game = () => {
     case "game":
       return (
         <Monitor {...monitorProps}>
-          {/* Canvas is always mounted AND visible from the very first render
-              so SDL_CreateWindow (called during chocolate-doom's startup) can
-              measure its computed dimensions from the surrounding
-              #monitorscreen layout. Hiding it with `display: none` causes SDL
-              to capture a 0x0 framebuffer and the game renders nothing even
-              after the canvas is later revealed. The DownloadProgress
-              component sits on top as an absolutely-positioned overlay (see
-              ProgressBar.tsx) while the WAD streams in. */}
-          <canvas
-            id="canvas"
-            ref={canvasRef}
-            onContextMenu={(e) => e.preventDefault()}
-            tabIndex={-1}
-            style={{ display: view === "game" ? "" : "none" }}
+          <GameCanvas
+            canvasRef={canvasRef}
+            visible={view === "game"}
+            iwadLabel={IWADS[iwad]?.label ?? "Doom"}
+            downloadsDone={downloadsDone}
+            totalPercent={totalPercent}
+            hasTotals={hasTotals}
+            totalLoaded={totalLoaded}
+            totalTotal={totalTotal}
           />
-          {!downloadsDone && (
-            <DownloadProgress
-              iwadLabel={IWADS[iwad]?.label ?? "Doom"}
-              totalPercent={totalPercent}
-              hasTotals={hasTotals}
-              totalLoaded={totalLoaded}
-              totalTotal={totalTotal}
-            />
-          )}
         </Monitor>
       );
     default:
@@ -381,6 +431,8 @@ export const Game = () => {
 };
 
 const Home = ({ onSubmit }) => {
+  useHomeTool(onSubmit);
+
   return (
     <>
       <div id="buttons">
@@ -448,6 +500,8 @@ const Home = ({ onSubmit }) => {
 };
 
 const ChooseMap = ({ onSubmit }) => {
+  useChooseIwadTool(onSubmit);
+
   return (
     <div id="text">
       <h1 className="vspace">Choose which IWAD to play</h1>
@@ -508,6 +562,8 @@ const ChoosePet = ({ onSubmit }) => {
 };
 
 const TypeOfGame = ({ onSubmit }) => {
+  useTypeOfGameTool(onSubmit);
+
   return (
     <div id="text">
       <h1 className="vspace">Chose the type of multiplayer game</h1>

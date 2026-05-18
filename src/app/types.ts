@@ -12,6 +12,16 @@ export type EmscriptenFS = {
   ) => void;
 };
 
+// Subset of Emscripten's `ccall` we use. The full upstream signature
+// supports more return types and an options object, but we only ever
+// call wmcp_get_state_json() which returns a C string.
+export type EmscriptenCcall = (
+  ident: string,
+  returnType: "string" | "number" | null,
+  argTypes: ReadonlyArray<"string" | "number" | "array">,
+  args: ReadonlyArray<string | number | Uint8Array>,
+) => unknown;
+
 export type EmscriptenModuleConfig = {
   arguments?: string[];
   canvas?: HTMLCanvasElement;
@@ -28,6 +38,26 @@ export type EmscriptenModuleConfig = {
   FS?: EmscriptenFS;
   callMain?: (args: string[]) => unknown;
   calledRun?: boolean;
+  // Available after onRuntimeInitialized fires. Exposed by the
+  // EXPORTED_RUNTIME_METHODS=ccall flag in doom/src/CMakeLists.txt.
+  ccall?: EmscriptenCcall;
+  // Direct view into the wasm linear memory, exposed via
+  // EXPORTED_RUNTIME_METHODS=HEAPU8. Used by get_screenshot to read the
+  // RGBA framebuffer pointed at by wmcp_get_framebuffer_rgba.
+  HEAPU8?: Uint8Array;
+  // Direct exports, bound after onRuntimeInitialized.
+  // wmcp_get_state_json: reads from game globals and returns a JSON
+  // string matching DoomVisionState (see doom/src/doom/wmcp_state.c).
+  _wmcp_get_state_json?: () => number; // returns char*; use via ccall.
+  // wmcp_get_framebuffer_rgba: returns a pointer to a static 320x200
+  // RGBA buffer reflecting the most recent rendered frame, with the
+  // current gamma-corrected palette applied. 256,000 bytes, row-major,
+  // no padding, alpha always 0xFF.
+  _wmcp_get_framebuffer_rgba?: () => number;
+  // wmcp_get_menu_json: returns a pointer to a static JSON string
+  // describing the active menu, or the literal "null" when no menu is
+  // open. See doom/src/doom/wmcp_state.c.
+  _wmcp_get_menu_json?: () => number;
 };
 
 // ---------------------------------------------------------------------------

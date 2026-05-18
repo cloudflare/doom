@@ -194,6 +194,20 @@ if (DEFINED EMSCRIPTEN)
     #                                  by net_websockets.c)
     #   -gsource-map / --source-map-base /  - emit a wasm sourcemap
     #   -O3                          - override the project-wide -O2 default
-    set(EM_LINK_FLAGS "${SDL_FLAGS} -s SDL2_MIXER_FORMATS=[\"ogg\"] -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=64MB -s ASYNCIFY=1 -s EMULATE_FUNCTION_POINTER_CASTS=1 -s EXIT_RUNTIME=1 -s ASSERTIONS=0 -s STACK_OVERFLOW_CHECK=1 -s ERROR_ON_UNDEFINED_SYMBOLS=0 -s FORCE_FILESYSTEM=1 -s EXPORTED_RUNTIME_METHODS=ccall,cwrap,FS,ENV,PATH,ERRNO_CODES,callMain -s EXPORTED_FUNCTIONS=_main -lwebsocket.js -O3 -gsource-map --source-map-base /")
+    # EXPORTED_FUNCTIONS additions:
+    #   _wmcp_get_state_json     - reads a snapshot of the game state from
+    #     C globals (players[], gamestate, automapactive, thinkercap)
+    #     and returns a static-buffer JSON string. Called from the
+    #     React app's `get_state` WebMCP tool via Module.ccall.
+    #   _wmcp_get_framebuffer_rgba - returns a pointer to a static
+    #     320x200 RGBA snapshot of I_VideoBuffer with the current palette
+    #     applied. Called from the `get_screenshot` WebMCP tool to build
+    #     a pixel-perfect PNG without going through the scaled DOM canvas.
+    #   _wmcp_get_menu_json      - reads currentMenu / itemOn / save
+    #     strings and returns a JSON description of the active menu
+    #     (labels resolved from M_XXXXX lump names, with a special case
+    #     for the load/save slot menus). Called from the `get_menu`
+    #     WebMCP tool.
+    set(EM_LINK_FLAGS "${SDL_FLAGS} -s SDL2_MIXER_FORMATS=[\"ogg\"] -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=64MB -s ASYNCIFY=1 -s EMULATE_FUNCTION_POINTER_CASTS=1 -s EXIT_RUNTIME=1 -s ASSERTIONS=0 -s STACK_OVERFLOW_CHECK=1 -s ERROR_ON_UNDEFINED_SYMBOLS=0 -s FORCE_FILESYSTEM=1 -s EXPORTED_RUNTIME_METHODS=ccall,cwrap,FS,ENV,PATH,ERRNO_CODES,callMain,HEAPU8 -s EXPORTED_FUNCTIONS=_main,_wmcp_get_state_json,_wmcp_get_framebuffer_rgba,_wmcp_get_menu_json -lwebsocket.js -O3 -gsource-map --source-map-base /")
     set_target_properties("${PROGRAM_PREFIX}doom" PROPERTIES LINK_FLAGS "${EM_LINK_FLAGS}")
 endif()
