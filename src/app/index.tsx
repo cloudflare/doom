@@ -3,6 +3,11 @@ import ReactDOM from "react-dom/client";
 import { createBrowserRouter, RouterProvider, Outlet } from "react-router-dom";
 
 import { Game } from "./components/Game";
+import { initWebMCP } from "./lib/webmcp";
+
+// Install navigator.modelContext for AI agents. Tools are registered
+// per-screen inside <Game />.
+initWebMCP();
 
 const NotFound = () => {
   return (

@@ -79,6 +79,11 @@ void I_StartTic (void);
 
 void I_EnableLoadingDisk(int xoffs, int yoffs);
 
+// Copy the current gamma-corrected palette out as flat RGB bytes. Used
+// by wmcp_state.c to assemble a 320x200 RGBA snapshot of I_VideoBuffer
+// without pulling SDL types into doom/src/doom/*.
+void I_CopyPaletteRGB(unsigned char out[256][3]);
+
 extern char *video_driver;
 extern boolean screenvisible;
 

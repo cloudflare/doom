@@ -80,6 +80,22 @@ static SDL_Rect blit_rect = {
 // palette
 
 static SDL_Color palette[256];
+
+// Copy the current gamma-corrected palette out into a flat RGB buffer.
+// Used by wmcp_state.c (doom/src/doom/wmcp_state.c) when assembling a
+// 320x200 RGBA snapshot of I_VideoBuffer for the WebMCP `get_screenshot`
+// tool. Kept in this translation unit so SDL_Color stays out of any
+// header that doesn't already pull in SDL.
+void I_CopyPaletteRGB(unsigned char out[256][3])
+{
+    int i;
+    for (i = 0; i < 256; i++)
+    {
+        out[i][0] = palette[i].r;
+        out[i][1] = palette[i].g;
+        out[i][2] = palette[i].b;
+    }
+}
 static boolean palette_to_set;
 
 // display has been set up?

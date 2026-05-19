@@ -19,6 +19,7 @@ Features and changelog since the [initial](https://blog.cloudflare.com/doom-mult
 - Over-the-Internet multiplayer support using WebSocket TCP connections and a Durable Object for communication and routing between clients.
   - Durable Object router: migrated away from fetch to [invoke RPC methods](https://developers.cloudflare.com/durable-objects/best-practices/create-durable-object-stubs-and-send-requests/#invoke-rpc-methods). 🆕
 - Uses Workers AI [Text-to-Spech models](https://developers.cloudflare.com/workers-ai/models/?tasks=Text-to-Speech) to "speak" the multi-player and system game messages. 💬 🆕
+- Engine-side state introspection for AI agents via [`wmcp_get_state_json`](doom/src/doom/wmcp_state.c), a patched-in `EMSCRIPTEN_KEEPALIVE` export that reads `gamestate`, `players[consoleplayer]` and the global `thinkercap` mobj chain, returning a JSON snapshot (HUD, keys, enemies in FOV with bearing/distance bins) matching the [`DoomVisionState`](src/lib/doomState.ts) schema. Surfaced to model contexts as the `get_state` WebMCP tool alongside the existing `get_screenshot`. 🆕
 
 ## Running locally and deploying
 
