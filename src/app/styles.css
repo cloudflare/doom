@@ -28,19 +28,14 @@ html {
 
 body {
     background-color: #e8672f;
+    background-image: url("/hero-background.png");
+    background-repeat: no-repeat;
+    background-size: cover;
+    background-position: center center;
+    background-attachment: fixed;
     margin: 0;
     padding: 2ch;
     /* vietnamese */
-}
-
-.bg-video {
-    position: fixed;
-    inset: 0;
-    width: 100vw;
-    height: 100vh;
-    object-fit: cover;
-    z-index: -1;
-    pointer-events: none;
 }
 
 #logo {

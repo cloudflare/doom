@@ -20,16 +20,6 @@ const NotFound = () => {
 const Root = () => {
   return (
     <>
-      <video
-        className="bg-video"
-        src="https://workers.cloudflare.com/static/hero-background-video.mp4"
-        autoPlay
-        muted
-        loop
-        playsInline
-        preload="auto"
-        aria-hidden
-      />
       <Outlet />
     </>
   );
