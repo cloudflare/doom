@@ -56,20 +56,21 @@ return "combat run complete";
 // Full deterministic auto-player. Faithful port of the original
 // host-side /play loop into a single codemode bot. Priority-ordered
 // playing policy: fire centred enemies → turn toward off-centre
-// enemies → unstick → open doors → take exits → grab useful
-// pickups → navigate toward the deepest open ray. Designed to clear
-// a level autonomously without an LLM in the loop.
+// enemies → unstick → open doors / switches → take exits → grab
+// useful pickups → navigate toward the deepest open ray. Designed
+// to clear a level autonomously without an LLM in the loop.
 const AUTOPLAY_BOT = `// Deterministic Doom auto-player.
 //
 // Priority each tick (highest first):
-//   1. Centre-FOV enemy   -> fire
-//   2. Off-centre enemy   -> turn toward it
+//   1. Centre-FOV enemy           -> fire
+//   2. Off-centre enemy           -> turn toward it
 //   3. Hard wedge (>=6 stationary ticks) -> 700ms right turn
-//   4. Door at <=80 units -> press use, step forward
-//   5. Exit at <=200 units -> press use, step forward
-//   6. Useful pickup      -> turn toward / approach it (sticky)
+//   4. Door / switch ahead, close -> press use, step forward
+//   4b. Door / switch off-centre  -> turn toward it (approach)
+//   5. Exit at <=200 units        -> press use, step forward
+//   6. Useful pickup              -> turn toward / approach it (sticky)
 //   7. Soft wedge (>=3 stationary ticks) -> 350ms right turn
-//   8. Navigate           -> follow deepest open ray
+//   8. Navigate                   -> follow deepest open ray
 //
 // Tuning constants -- tweak these to change behaviour.
 const MAX_TICKS = 400;
@@ -284,15 +285,38 @@ async function playStep(state) {
     return "unwedge_hard";
   }
 
-  // 4. Door right in front -> use it, step forward.
-  const doorRay = state.raycasts.find(
-    (r) => r.hit === "door" && r.distance <= 80,
-  );
-  if (doorRay && doorCooldown === 0) {
-    await bot.press("use", 80);
-    await bot.press("forward", 300);
-    doorCooldown = DOOR_COOLDOWN;
-    return "open_door(d=" + doorRay.distance + ")";
+  // 4. Door / switch handling. Doom's "use" key activates both:
+  //    - door lines (open / close / lock-and-unlock)
+  //    - switch lines (raise lifts, open remote doors, end-level
+  //      switches that aren't tagged as exits, etc.)
+  //    Both surface through raycasts as hit="door" or hit="switch".
+  //    Treat them the same: walk up, press use.
+  //
+  //    Pick the ray with the smallest off-centre bearing first; if
+  //    multiple usable lines are in view, the most-aligned one is
+  //    usually the one the level designer intended us to interact
+  //    with.
+  const usableRays = state.raycasts
+    .filter((r) => r.hit === "door" || r.hit === "switch")
+    .sort((a, b) => Math.abs(a.bearing_deg) - Math.abs(b.bearing_deg));
+  const usableRay = usableRays[0];
+  if (usableRay && doorCooldown === 0) {
+    const aligned = Math.abs(usableRay.bearing_deg) <= 15;
+    // 4a. Close + roughly centred -> press use, step through.
+    if (aligned && usableRay.distance <= 80) {
+      await bot.press("use", 80);
+      await bot.press("forward", 300);
+      doorCooldown = DOOR_COOLDOWN;
+      return "open_" + usableRay.hit + "(d=" + usableRay.distance + ")";
+    }
+    // 4b. Within reach but not yet aligned / close -> approach.
+    //     Skip while wedged so we don't fight the unstick logic.
+    if (!wedgedSoft && usableRay.distance <= 400) {
+      const action = await approach(usableRay.bearing_deg, usableRay.distance);
+      // Drop any pickup lock; doors/switches usually gate progress.
+      pickupTarget = null;
+      return "approach_" + usableRay.hit + "(" + action + ")";
+    }
   }
 
   // 5. Exit close ahead -> use, step forward.
@@ -396,6 +420,9 @@ for (let tick = 1; tick <= MAX_TICKS; tick++) {
   const interesting =
     action.startsWith("fire") ||
     action.startsWith("open_door") ||
+    action.startsWith("open_switch") ||
+    action.startsWith("approach_door") ||
+    action.startsWith("approach_switch") ||
     action.startsWith("exit_level") ||
     action.startsWith("grab:") ||
     action.startsWith("aim_enemy") ||
@@ -436,18 +463,7 @@ return { ticks: MAX_TICKS, finalScreen: lastScreen, finalHp: lastHp, actions };
 // Useful for inspecting what fields the engine exposes without
 // writing a loop.
 const INSPECT_BOT = `// Dump a single state snapshot and quit.
-const s = await bot.getState();
-await bot.log("screen:", s.screen);
-await bot.log("hud:", JSON.stringify(s.hud));
-await bot.log("player:", JSON.stringify(s.player));
-await bot.log("raycasts:", s.raycasts.length, "things:", s.things_visible.length,
-  "enemies:", s.enemies_visible.length);
-for (const r of s.raycasts) {
-  await bot.log("  ray", r.bearing_deg.toFixed(0) + "deg",
-    "hit:", r.hit, "d:", r.distance,
-    r.thing_type ? "(" + r.thing_type + ")" : "");
-}
-return s;
+await bot.log(JSON.stringify(await bot.getState(), null, 2));
 `;
 
 interface Example {
@@ -465,8 +481,34 @@ const EXAMPLES: Example[] = [
 
 const STARTER_CODE = AUTOPLAY_BOT;
 const STORAGE_KEY = "doom-player-bot-code";
+// `sessionStorage` (per-tab) rather than `localStorage` because BR
+// sessions are scoped to a single user "play session"; carrying one
+// across tabs / restarts would just dump us on a dead session every
+// time. Cleared on tab close, restored on reload.
+const SESSION_KEY = "doom-player-br-session-id";
 
 type Mode = "idle" | "running";
+
+/**
+ * Returns true when two BR DevTools URLs point at the same browser
+ * session + page target. The host's `/json/list` re-issues the JWT
+ * (and any other auth query params) on every call, so we ignore
+ * everything except the `/browser/<sessionId>/page/<targetId>` path
+ * segment.
+ */
+function sameDevtoolsTarget(
+	a: string | null,
+	b: string | null,
+): boolean {
+	if (!a || !b) return false;
+	const extract = (s: string): string | null => {
+		const m = s.match(/\/browser\/([^/]+)\/page\/([^/?#]+)/);
+		return m ? `${m[1]}/${m[2]}` : null;
+	};
+	const ka = extract(a);
+	const kb = extract(b);
+	return ka !== null && ka === kb;
+}
 
 export function App() {
 	const [code, setCode] = useState<string>(() => {
@@ -483,7 +525,21 @@ export function App() {
 	// the "Show log" toggle. Each fresh run flips this back on so a
 	// reused browser session re-shows the inspector.
 	const [showDevtools, setShowDevtools] = useState<boolean>(true);
+	// BR session id captured from the previous run's `# session:`
+	// marker. Sent back on the next /run so the worker reuses the
+	// same Chromium instance. Persisted in sessionStorage so it
+	// survives reloads of this tab.
+	const [sessionId, setSessionId] = useState<string | null>(() => {
+		try {
+			return sessionStorage.getItem(SESSION_KEY);
+		} catch {
+			return null;
+		}
+	});
 	const abortRef = useRef<AbortController | null>(null);
+	// Mirror of sessionId for use inside async callbacks that
+	// captured an older value (e.g. streamResponse closure).
+	const sessionIdRef = useRef<string | null>(sessionId);
 	const logPaneRef = useRef<HTMLPreElement | null>(null);
 
 	useEffect(() => {
@@ -493,6 +549,16 @@ export function App() {
 			// ignore quota / disabled storage
 		}
 	}, [code]);
+
+	useEffect(() => {
+		sessionIdRef.current = sessionId;
+		try {
+			if (sessionId) sessionStorage.setItem(SESSION_KEY, sessionId);
+			else sessionStorage.removeItem(SESSION_KEY);
+		} catch {
+			// ignore disabled storage
+		}
+	}, [sessionId]);
 
 	// Auto-scroll the log pane as new lines arrive.
 	useEffect(() => {
@@ -510,7 +576,8 @@ export function App() {
 	}, []);
 
 	// Some lines in the stream carry structured side-channel data
-	// (devtools URL, etc). Recognise them here and forward to state.
+	// (devtools URL, BR session id, ...). Recognise them here and
+	// forward to state so the UI can capture them.
 	const handleLine = useCallback((line: string) => {
 		const dt = line.match(/^# devtools: (.+)$/);
 		if (dt) {
@@ -521,11 +588,24 @@ export function App() {
 				// is a query param the DevTools frontend reads on load.
 				const sep = raw.includes("?") ? "&" : "?";
 				const url = raw.includes("mode=") ? raw : `${raw}${sep}mode=tab`;
-				setDevtoolsUrl(url);
+				// Avoid remounting the iframe when the new URL points
+				// at the same browser session + page target as the
+				// existing one (only the JWT differs across runs).
+				// React would otherwise bump `src` and force a full
+				// DevTools reload, losing any panel state the user
+				// had open. Identity is `/browser/<sid>/page/<tid>`.
+				setDevtoolsUrl((prev) =>
+					sameDevtoolsTarget(prev, url) ? prev : url,
+				);
 				// Whenever a new URL arrives, flip the embed back on
 				// so a re-run automatically shows the inspector again.
 				setShowDevtools(true);
 			}
+		}
+		const sess = line.match(/^# session: (.+)$/);
+		if (sess) {
+			const id = sess[1].trim();
+			if (id) setSessionId(id);
 		}
 		append(line);
 	}, [append]);
@@ -567,15 +647,27 @@ export function App() {
 		if (mode === "running") return;
 		setMode("running");
 		setLog([]);
-		setDevtoolsUrl(null);
+		const reuseId = sessionIdRef.current;
+		// Only blank the embedded DevTools iframe when we're starting
+		// from scratch. If we're about to reuse the same BR session,
+		// the next run's `# devtools:` line will carry the same URL
+		// anyway, and tearing the iframe down + remounting just
+		// flashes the panel and discards any DevTools-side state
+		// (open tabs, breakpoints, scroll position).
+		if (!reuseId) setDevtoolsUrl(null);
 		const ac = new AbortController();
 		abortRef.current = ac;
 		try {
-			append(`# POST /run (${code.length} bytes)`);
+			append(
+				`# POST /run (${code.length} bytes)` +
+					(reuseId ? ` (reusing session ${reuseId})` : ""),
+			);
+			const requestBody: Record<string, unknown> = { code };
+			if (reuseId) requestBody.sessionId = reuseId;
 			const resp = await fetch("/run", {
 				method: "POST",
 				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ code }),
+				body: JSON.stringify(requestBody),
 				signal: ac.signal,
 			});
 			await streamResponse(resp, ac.signal);
@@ -596,6 +688,10 @@ export function App() {
 
 	const clearLog = useCallback(() => setLog([]), []);
 	const resetCode = useCallback(() => setCode(STARTER_CODE), []);
+	const resetSession = useCallback(() => {
+		setSessionId(null);
+		setDevtoolsUrl(null);
+	}, []);
 	const loadExample = useCallback(
 		(id: string) => {
 			const ex = EXAMPLES.find((e) => e.id === id);
@@ -662,6 +758,23 @@ export function App() {
 								))}
 							</select>
 						</label>
+						{sessionId ? (
+							<span
+								className="session-chip"
+								title={`Will reuse BR session ${sessionId} on next run`}
+							>
+								session {sessionId.slice(0, 8)}
+								<button
+									type="button"
+									className="session-reset"
+									onClick={resetSession}
+									disabled={mode === "running"}
+									title="Drop the saved session id; next run will allocate a fresh browser"
+								>
+									×
+								</button>
+							</span>
+						) : null}
 						<button type="button" onClick={resetCode} title="Reset to starter snippet">
 							Reset
 						</button>

@@ -2,6 +2,7 @@ import { CDPConnection, CDPSession } from "./cdp/client";
 import { WebMCPClient } from "./cdp/webmcp";
 import { runBot } from "./bot/runner";
 import { preroll } from "./preroll";
+import { extractTextFromInvokeResult } from "./cdp/mcpPayload";
 
 interface BrowserSessionResponse {
 	sessionId: string;
@@ -44,6 +45,42 @@ async function acquireBrowserSession(env: Env): Promise<string> {
 		throw new Error("BR session response is missing sessionId");
 	}
 	return body.sessionId;
+}
+
+/**
+ * Probe whether a previously-allocated BR session is still alive by
+ * GETting its `/json/list` endpoint. Returns true on a 2xx response,
+ * false on anything else (session expired, never existed, etc).
+ *
+ * BR sessions idle-time-out after a few minutes of no CDP activity,
+ * so callers must be prepared to fall back to allocating a new one.
+ */
+async function probeBrowserSession(env: Env, sessionId: string): Promise<boolean> {
+	try {
+		const res = await env.BROWSER.fetch(
+			`http://fake.host/v1/devtools/browser/${sessionId}/json/list`,
+		);
+		return res.ok;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Reuse `sessionId` if it's still alive, otherwise allocate a new
+ * one. Returns `{sessionId, reused}` so the caller can tell the
+ * stream which happened.
+ */
+async function acquireOrReuseSession(
+	env: Env,
+	preferredSessionId: string | null,
+): Promise<{ sessionId: string; reused: boolean }> {
+	if (preferredSessionId) {
+		const alive = await probeBrowserSession(env, preferredSessionId);
+		if (alive) return { sessionId: preferredSessionId, reused: true };
+	}
+	const sessionId = await acquireBrowserSession(env);
+	return { sessionId, reused: false };
 }
 
 async function openBrowserWebSocket(env: Env, sessionId: string): Promise<WebSocket> {
@@ -98,15 +135,25 @@ async function fetchDevtoolsEntry(
 async function attachToDoomPage(
 	conn: CDPConnection,
 	wantUrl: string,
-): Promise<{ targetId: string; session: CDPSession; loaded: Promise<void> }> {
+): Promise<{
+	targetId: string;
+	session: CDPSession;
+	loaded: Promise<void>;
+	/**
+	 * True iff the attach reused an existing document on the right
+	 * origin without navigating or reloading. The caller can use this
+	 * to skip the preroll if the engine is already in a playable
+	 * state.
+	 */
+	reusedDocument: boolean;
+}> {
 	const { targetInfos } = await conn.send<TargetGetTargetsResponse>("Target.getTargets");
 
 	// Browser Rendering sessions start with at least one blank page
 	// target. Reuse it (creating a second page leaks browser context
 	// and counts as an extra "page" against the session). Prefer a
-	// target whose URL is already on the right origin -- that way a
-	// reused session that's still on the doom page can skip the
-	// navigate roundtrip.
+	// target whose URL is already on the right origin so we can
+	// attach to a still-running engine without reloading.
 	const wantOrigin = new URL(wantUrl).origin;
 	const pages = targetInfos.filter((t) => t.type === "page");
 	const onOrigin = pages.find((t) => {
@@ -129,7 +176,7 @@ async function attachToDoomPage(
 	await session.send("Page.enable");
 
 	// Subscribe to the load event BEFORE we kick the navigation off.
-	// CDP fires `Page.loadEventFired` once, on the actual load, and if
+	// CDP fires `Page.loadEventFired` once, on the actual load; if
 	// we wire up the listener after the event has already happened
 	// we'll sit there waiting indefinitely. Installing it first is
 	// the only race-free pattern.
@@ -140,24 +187,20 @@ async function attachToDoomPage(
 		});
 	});
 
-	// We MUST start every run from a fresh React mount + engine boot.
-	// A reused BR session that was mid-game still has the doom wasm
-	// loaded with stale state -- `bootedOnce` is set, the engine is
-	// inside the main menu / a level / a pause prompt depending on
-	// where the previous run left it. Our preroll assumes the React
-	// landing screen, so anything other than that breaks the
-	// start_game -> choose_iwad -> start_new_game -> menu-keys flow.
-	//
-	// `Page.navigate` to the same URL is a no-op in CDP, so we either
-	// navigate (different URL) or reload (same URL) to force a clean
-	// document.
+	// If we've grabbed an existing page that's already on the doom
+	// origin, leave it alone -- the engine may be mid-game and the
+	// bot can run on top of it. The caller probes for "already
+	// playing" once WebMCP comes up and decides whether to skip the
+	// preroll. Only navigate / reload when there's no usable page to
+	// reuse.
+	let reusedDocument = false;
 	if (target.url !== wantUrl) {
 		await session.send("Page.navigate", { url: wantUrl });
 	} else {
-		await session.send("Page.reload", { ignoreCache: false });
+		reusedDocument = true;
 	}
 
-	return { targetId: target.targetId, session, loaded };
+	return { targetId: target.targetId, session, loaded, reusedDocument };
 }
 
 /**
@@ -274,6 +317,13 @@ interface BootResult {
 	sessionId: string;
 	firstTool: string;
 	/**
+	 * True if we attached to a page that was already on the doom
+	 * origin and we did NOT navigate / reload it. In that case the
+	 * engine may already be playing -- check via `isAlreadyPlaying`
+	 * before deciding whether to preroll.
+	 */
+	reusedDocument: boolean;
+	/**
 	 * DevTools frontend URL for the attached target, as returned by
 	 * BR's `/json/list`. `null` if BR didn't surface one or the lookup
 	 * failed. Suitable for displaying to a human (open in tab or embed
@@ -285,20 +335,47 @@ interface BootResult {
 }
 
 /**
- * Acquire a BR session, attach to the doom page, enable WebMCP, and
- * wait for the first doom tool to appear. Caller is responsible for
- * `conn.close()` once finished.
+ * Acquire (or reuse) a BR session, attach to the doom page, enable
+ * WebMCP, and wait for the first doom tool to appear. Caller is
+ * responsible for `conn.close()` once finished.
+ *
+ * If `preferredSessionId` is supplied and still alive, it's reused
+ * (so the same Chromium instance survives across `/run` calls). The
+ * `# session: <id>` line at the top of the stream tells the client
+ * which session id to send back next time.
  */
-async function bootDoomBrowser(env: Env, doomUrl: string, write: (s: string) => Promise<void>): Promise<BootResult> {
-	const sessionId = await acquireBrowserSession(env);
-	await write(`# acquired BR session ${sessionId}`);
+async function bootDoomBrowser(
+	env: Env,
+	doomUrl: string,
+	write: (s: string) => Promise<void>,
+	preferredSessionId: string | null = null,
+): Promise<BootResult> {
+	const { sessionId, reused } = await acquireOrReuseSession(
+		env,
+		preferredSessionId,
+	);
+	// Structured marker: the client parses this line to capture the
+	// session id and pass it back on the next /run, so we keep
+	// hitting the same Chromium instance.
+	await write(`# session: ${sessionId}`);
+	await write(
+		reused
+			? `# acquired BR session ${sessionId} (reused)`
+			: `# acquired BR session ${sessionId} (new)`,
+	);
 
 	const ws = await openBrowserWebSocket(env, sessionId);
 	await write(`# opened CDP websocket`);
 
 	const conn = new CDPConnection(ws);
-	const { targetId, session, loaded } = await attachToDoomPage(conn, doomUrl);
-	await write(`# attached target=${targetId} cdpSession=${session.sessionId}`);
+	const { targetId, session, loaded, reusedDocument } = await attachToDoomPage(
+		conn,
+		doomUrl,
+	);
+	await write(
+		`# attached target=${targetId} cdpSession=${session.sessionId}` +
+			(reusedDocument ? " (reusing existing document)" : ""),
+	);
 
 	// Kick off the WebMCP enable + the DevTools URL lookup in
 	// parallel with the page load. None of them depend on each
@@ -322,17 +399,20 @@ async function bootDoomBrowser(env: Env, doomUrl: string, write: (s: string) => 
 		}
 		return { devtoolsFrontendUrl, webSocketDebuggerUrl };
 	});
-	const loadedP = loaded.then(() => write(`# page loaded`));
+
+	// Only wait for `loadEventFired` when we actually triggered a
+	// navigation. On document reuse the load event has already fired
+	// (in the past, before we attached) and our listener would just
+	// sit on the 30s timeout for no benefit.
+	const loadStep: Promise<unknown> = reusedDocument
+		? write(`# page already loaded (reused document)`)
+		: Promise.race([
+				loaded.then(() => write(`# page loaded`)),
+				new Promise<void>((r) => setTimeout(r, 30_000)),
+			]);
 
 	const [, , { devtoolsFrontendUrl, webSocketDebuggerUrl }] = await Promise.all([
-		// Bounded load wait -- some BR sessions deliver
-		// `loadEventFired` before our listener attaches; the agent's
-		// actual gate is `waitForAnyTool` below, so we don't fail if
-		// the load promise sits.
-		Promise.race([
-			loadedP,
-			new Promise<void>((r) => setTimeout(r, 30_000)),
-		]),
+		loadStep,
 		enableP,
 		devtoolsP,
 	]);
@@ -347,9 +427,44 @@ async function bootDoomBrowser(env: Env, doomUrl: string, write: (s: string) => 
 		targetId,
 		sessionId,
 		firstTool,
+		reusedDocument,
 		devtoolsFrontendUrl,
 		webSocketDebuggerUrl,
 	};
+}
+
+/**
+ * Probe whether the engine is already in a playable level, so the
+ * caller can skip the preroll and let the bot run on top of the
+ * existing game.
+ *
+ * Returns the screen name on success (e.g. "playing", "automap",
+ * "dead") or `null` when the engine isn't ready / isn't in a
+ * post-menu state. Never throws -- any failure is treated as "not
+ * already playing" so the caller falls back to the normal preroll.
+ */
+async function probeRunningScreen(
+	webmcp: WebMCPClient,
+): Promise<string | null> {
+	// The engine tools only register after Doom boots. If get_state
+	// isn't there yet, we definitely need to preroll.
+	if (!webmcp.get("get_state") || !webmcp.get("press_key")) return null;
+	try {
+		const res = await webmcp.invoke("get_state", {});
+		if (res.status !== "Completed") return null;
+		const text = extractTextFromInvokeResult(res);
+		if (!text) return null;
+		const parsed = JSON.parse(text) as { screen?: unknown };
+		const screen = typeof parsed.screen === "string" ? parsed.screen : null;
+		if (!screen) return null;
+		// "Already playing" covers any in-engine, post-menu screen the
+		// bot can usefully act on. Title / menu / demo / intermission
+		// / finale / unknown all mean "preroll needed".
+		const playable = new Set(["playing", "automap", "dead"]);
+		return playable.has(screen) ? screen : null;
+	} catch {
+		return null;
+	}
 }
 
 // ── Route: /run (user-authored bot via codemode) ────────────────────
@@ -357,6 +472,17 @@ async function bootDoomBrowser(env: Env, doomUrl: string, write: (s: string) => 
 interface BotRunRequest {
 	code?: string;
 	timeoutMs?: number;
+	/**
+	 * Optional BR session id to reuse. The client stores the
+	 * sessionId returned by the previous `/run` call and sends it
+	 * back here so we keep the same Chromium instance (and, with
+	 * `attachToDoomPage`'s document-reuse logic, the same in-engine
+	 * game state) across runs.
+	 *
+	 * If the session has expired BR will reject `/json/list` and we
+	 * fall back to allocating a fresh session.
+	 */
+	sessionId?: string;
 }
 
 async function handleRun(
@@ -408,20 +534,43 @@ async function handleRun(
 			await sink.write(`# bot src: ${preview}`);
 		}
 
+		const preferredSessionId =
+			typeof body.sessionId === "string" && body.sessionId.length > 0
+				? body.sessionId
+				: null;
+
 		let conn: CDPConnection | null = null;
 		try {
-			const boot = await bootDoomBrowser(env, doomUrl, sink.write);
+			const boot = await bootDoomBrowser(
+				env,
+				doomUrl,
+				sink.write,
+				preferredSessionId,
+			);
 			conn = boot.conn;
 
-			// Drive the game past the menus. Bot code starts with the
-			// engine already in a playable state.
-			await sink.write(`# preroll: starting`);
-			await preroll(boot.webmcp, {
-				onStep: (step) => {
-					void sink.write(`# preroll: ${step}`);
-				},
-			});
-			await sink.write(`# preroll: done`);
+			// If we reused an existing document and the engine is
+			// already past the menus, skip the preroll entirely --
+			// the bot can act on the running game as-is. Otherwise
+			// drive the home page -> IWAD -> skill picker flow into
+			// a fresh playable level.
+			let runningScreen: string | null = null;
+			if (boot.reusedDocument) {
+				runningScreen = await probeRunningScreen(boot.webmcp);
+			}
+			if (runningScreen) {
+				await sink.write(
+					`# preroll: skipped (engine already running, screen=${runningScreen})`,
+				);
+			} else {
+				await sink.write(`# preroll: starting`);
+				await preroll(boot.webmcp, {
+					onStep: (step) => {
+						void sink.write(`# preroll: ${step}`);
+					},
+				});
+				await sink.write(`# preroll: done`);
+			}
 
 			await sink.write(`# bot: starting`);
 			const result = await runBot({

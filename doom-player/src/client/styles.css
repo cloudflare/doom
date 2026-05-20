@@ -155,6 +155,45 @@ button.primary:hover:not(:disabled) {
 }
 
 /*
+ * Small chip showing the BR session id we'll reuse on the next run.
+ * Clicking the inner × button clears it so a fresh session is
+ * allocated.
+ */
+.session-chip {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	font-family:
+		ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono",
+		monospace;
+	font-size: 11.5px;
+	color: var(--fg-dim);
+	padding: 3px 6px 3px 8px;
+	border: 1px solid var(--panel-border);
+	border-radius: 12px;
+	background: #21262d;
+}
+.session-reset {
+	font: inherit;
+	font-size: 14px;
+	line-height: 1;
+	padding: 0 4px;
+	border: 0;
+	border-radius: 50%;
+	background: transparent;
+	color: var(--fg-dim);
+	cursor: pointer;
+}
+.session-reset:hover:not(:disabled) {
+	background: #30363d;
+	color: var(--fg);
+}
+.session-reset:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+/*
  * The editor area must collapse to whatever vertical space the flex
  * parent gives it, never push the layout taller. Four nested
  * containers each need height + min-height: 0 (or absolute
