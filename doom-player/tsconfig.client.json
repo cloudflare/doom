@@ -1,0 +1,21 @@
+{
+	"compilerOptions": {
+		"target": "es2022",
+		"lib": ["es2024", "dom", "dom.iterable"],
+		"jsx": "react-jsx",
+		"module": "es2022",
+		"moduleResolution": "Bundler",
+		"resolveJsonModule": true,
+		"allowJs": false,
+		"noEmit": true,
+		"isolatedModules": true,
+		"allowSyntheticDefaultImports": true,
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"strict": true,
+		"skipLibCheck": true,
+		"composite": true,
+		"types": ["vite/client"]
+	},
+	"include": ["src/client/**/*.ts", "src/client/**/*.tsx"]
+}
