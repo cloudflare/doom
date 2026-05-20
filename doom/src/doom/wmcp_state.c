@@ -571,6 +571,15 @@ static struct {
     // in fraction order. Capped to avoid runaway in dense maps.
     wmcp_ray_thing_t things[WMCP_MAX_RAY_THINGS];
     int          thing_count;
+
+    // First interactable line (door / switch / exit) we passed through
+    // WITHOUT being blocked by it. A currently-open door, an unactivated
+    // switch in an open passage, etc. The ray keeps tracing past these,
+    // but if it reaches max range or hits a generic wall further on,
+    // we'd rather report this interactable in the hit field so the
+    // agent knows it exists.
+    fixed_t      crossed_frac;
+    wmcp_hit_kind_t crossed_kind;
 } wmcp_ray;
 
 // Classify a line special into one of our hit kinds. Returns
@@ -661,10 +670,21 @@ wmcp_ray_traverse(intercept_t *in)
             return false;
         }
 
-        // Pass-through line: record nothing, keep tracing. We do NOT
-        // stop on switches / specials in open doorways because the
-        // agent's line of sight extends beyond them; the switch is
-        // reachable via the `use` key when adjacent.
+        // Pass-through line. We don't stop the ray, but if this is
+        // an interactable line (door / switch / exit) we record the
+        // FIRST one we cross so the agent learns about open doors and
+        // wall switches reachable via `use`. Later wall hits along the
+        // same ray will overwrite kind; if no further hit happens, the
+        // crossed special is what we report.
+        if (li->special != 0 && wmcp_ray.crossed_kind == WMCP_HIT_NONE)
+        {
+            wmcp_hit_kind_t k = wmcp_classify_special(li->special);
+            if (k != WMCP_HIT_WALL)
+            {
+                wmcp_ray.crossed_kind = k;
+                wmcp_ray.crossed_frac = in->frac;
+            }
+        }
         return true;
     }
     else
@@ -726,6 +746,8 @@ wmcp_cast_ray(const mobj_t *self,
     wmcp_ray.hit_mo = NULL;
     wmcp_ray.self = self;
     wmcp_ray.thing_count = 0;
+    wmcp_ray.crossed_frac = 0;
+    wmcp_ray.crossed_kind = WMCP_HIT_NONE;
 
     P_PathTraverse(x1, y1, x2, y2,
                    PT_ADDLINES | PT_ADDTHINGS,
@@ -733,20 +755,38 @@ wmcp_cast_ray(const mobj_t *self,
 
     *out_hit_mo = wmcp_ray.hit_mo;
 
-    if (wmcp_ray.kind == WMCP_HIT_NONE)
+    // Choose what to report. If the ray crossed an interactable (open
+    // door, wall switch, exit line) BEFORE hitting a blocker, prefer
+    // reporting that -- the agent cares more about "there is a door
+    // I can use 200u ahead" than "there is a wall 500u ahead". If
+    // both exist, the closer one wins on `frac`.
+    wmcp_hit_kind_t kind = wmcp_ray.kind;
+    fixed_t frac = wmcp_ray.hit_frac;
+    if (wmcp_ray.crossed_kind != WMCP_HIT_NONE)
+    {
+        if (kind == WMCP_HIT_NONE || wmcp_ray.crossed_frac < frac)
+        {
+            kind = wmcp_ray.crossed_kind;
+            frac = wmcp_ray.crossed_frac;
+            // A crossed-special never has a blocker mobj associated.
+            *out_hit_mo = NULL;
+        }
+    }
+
+    if (kind == WMCP_HIT_NONE)
     {
         *out_distance = WMCP_RAY_RANGE >> FRACBITS;
         *out_kind = "open";
         return;
     }
 
-    // Convert fractional distance back to map units. hit_frac is in
+    // Convert fractional distance back to map units. frac is in
     // [0, FRACUNIT]; multiply by the full ray length.
-    fixed_t dist = FixedMul(wmcp_ray.hit_frac, WMCP_RAY_RANGE);
+    fixed_t dist = FixedMul(frac, WMCP_RAY_RANGE);
     int dist_units = dist >> FRACBITS;
     if (dist_units < 0) dist_units = 0;
     *out_distance = dist_units;
-    *out_kind = wmcp_hit_kind_str(wmcp_ray.kind);
+    *out_kind = wmcp_hit_kind_str(kind);
 }
 
 // Convert a BAM angle to integer degrees [0, 360).
