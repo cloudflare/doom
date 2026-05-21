@@ -1,3 +1,4 @@
+import { WorkerEntrypoint } from "cloudflare:workers";
 import { CDPConnection, CDPSession } from "./cdp/client";
 import { WebMCPClient } from "./cdp/webmcp";
 import { runBot } from "./bot/runner";
@@ -573,10 +574,16 @@ async function handleRun(
 			}
 
 			await sink.write(`# bot: starting`);
+			// Only forward the AI binding when it's actually configured
+			// on this deployment. When the `ai` block is removed from
+			// wrangler.jsonc, `env.AI` is undefined and we skip injecting
+			// the `ai.*` namespace into the bot sandbox.
+			const aiBinding = (env as Env & { AI?: Ai }).AI;
 			const result = await runBot({
 				code,
 				loader: env.LOADER,
 				webmcp: boot.webmcp,
+				ai: aiBinding,
 				timeoutMs: body.timeoutMs,
 				onLog: (line) => {
 					void sink.write(line);
@@ -622,6 +629,51 @@ function safeJson(v: unknown): string {
 }
 
 // ── Entry point ─────────────────────────────────────────────────────
+
+// ── AI entrypoint ───────────────────────────────────────────────────
+//
+// Optional WorkerEntrypoint that wraps the Workers AI binding. The
+// `ai` binding in wrangler.jsonc is optional: if it's removed, every
+// method here throws a clean "AI binding not configured" error so
+// callers can detect it and fall back.
+//
+// The point of wrapping `env.AI` in a WorkerEntrypoint (rather than
+// exposing it directly) is that other workers — including dynamic
+// workers loaded via `LOADER` — can be given an RPC stub to this
+// class. That stub is a capability: the dynamic worker can call
+// `AI.run(model, input)` without seeing the underlying account / API
+// token, and we get a single chokepoint to add auth, logging, model
+// allow-lists, etc. later. See:
+// https://developers.cloudflare.com/dynamic-workers/usage/bindings/
+//
+// Usage from another worker (service binding):
+//
+//   // wrangler.jsonc of the *caller*:
+//   "services": [{ "binding": "DOOM_AI", "service": "doom-player",
+//                  "entrypoint": "AIEntrypoint" }]
+//
+//   // in the caller's code:
+//   const out = await env.DOOM_AI.run("@cf/meta/llama-3.1-8b-instruct",
+//                                     { prompt: "hello" });
+
+export class AIEntrypoint extends WorkerEntrypoint<Env> {
+	/**
+	 * Run a Workers AI model. Mirrors `env.AI.run(model, input, options?)`
+	 * one-to-one so callers don't have to learn a new shape. Throws if
+	 * the AI binding isn't configured on this worker.
+	 */
+	async run(model: string, input: unknown, options?: unknown): Promise<unknown> {
+		// Cast through unknown: `Ai.run` is heavily overloaded per
+		// model family and we deliberately keep this wrapper generic.
+		// The caller (host worker) only constructs this entrypoint
+		// when `env.AI` is configured, so we don't guard here.
+		return (this.env.AI.run as (m: string, i: unknown, o?: unknown) => Promise<unknown>)(
+			model,
+			input,
+			options,
+		);
+	}
+}
 
 export default {
 	async fetch(request, env, ctx): Promise<Response> {

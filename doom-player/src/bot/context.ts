@@ -245,6 +245,61 @@ export class BotContext {
     this.#onLog(line);
   }
 
+  /**
+   * Capture a pixel-perfect 320x200 PNG of the current frame, as
+   * base64-encoded bytes plus mime type. Useful for piping into a
+   * vision-capable LLM (see `ai.run(...)` in the sandbox).
+   */
+  async screenshot(): Promise<{ data: string; mimeType: string }> {
+    const res = await this.#webmcp.invoke("get_screenshot", {});
+    if (res.status !== "Completed") {
+      throw new Error(
+        `get_screenshot failed: status=${res.status} ${res.errorText ?? res.exception?.description ?? ""}`,
+      );
+    }
+    // get_screenshot returns `{ content: [{ type: "image", data,
+    // mimeType }, { type: "text", text }] }`. The MCP envelope can
+    // be wrapped one extra layer by the CDP transport, mirroring
+    // peelTextEnvelope in mcpPayload.ts; we walk at most a couple
+    // of layers looking for the image item.
+    let current: unknown = res.output;
+    for (let depth = 0; depth < 4; depth++) {
+      if (!current || typeof current !== "object") break;
+      const content = (current as { content?: unknown }).content;
+      if (Array.isArray(content)) {
+        const img = content.find(
+          (c): c is { type: "image"; data: string; mimeType: string } =>
+            !!c &&
+            typeof c === "object" &&
+            (c as { type?: unknown }).type === "image" &&
+            typeof (c as { data?: unknown }).data === "string" &&
+            typeof (c as { mimeType?: unknown }).mimeType === "string",
+        );
+        if (img) return { data: img.data, mimeType: img.mimeType };
+        // Descend through a nested text-encoded envelope, if any.
+        const text = content.find(
+          (c): c is { type: "text"; text: string } =>
+            !!c &&
+            typeof c === "object" &&
+            (c as { type?: unknown }).type === "text" &&
+            typeof (c as { text?: unknown }).text === "string",
+        );
+        if (text) {
+          try {
+            current = JSON.parse(text.text);
+            continue;
+          } catch {
+            break;
+          }
+        }
+      }
+      break;
+    }
+    throw new Error(
+      `get_screenshot returned no image content. Raw: ${safeStringify(res.output).slice(0, 200)}`,
+    );
+  }
+
   /** Read-only snapshot of how the bot has used the context so far. */
   stats(): Readonly<{
     stateReads: number;
