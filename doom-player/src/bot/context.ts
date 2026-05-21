@@ -156,6 +156,7 @@ export class BotContext {
     keyPresses: 0,
     sleeps: 0,
     logs: 0,
+    imageLogs: 0,
   };
 
   constructor(webmcp: WebMCPClient, opts: BotContextOptions = {}) {
@@ -300,12 +301,78 @@ export class BotContext {
     );
   }
 
+  /**
+   * Stream an image to the host log pane. Only the most recent
+   * image is kept by the UI -- this is a debug affordance, not a
+   * gallery. Pass either the result of `bot.screenshot()` directly,
+   * or any `{ data: base64, mimeType }` pair, plus an optional
+   * caption.
+   *
+   * The image flows as a single sentinel-prefixed log line:
+   *
+   *   \u0001img:<json>
+   *
+   * The host React app peels the sentinel off and renders an <img>;
+   * any other consumer of the stream just sees one weird line and
+   * can ignore it.
+   */
+  async logImage(
+    shot: { data: string; mimeType: string },
+    caption?: string,
+  ): Promise<void> {
+    if (
+      !shot ||
+      typeof shot.data !== "string" ||
+      typeof shot.mimeType !== "string"
+    ) {
+      throw new Error(
+        "logImage: expected { data: base64-string, mimeType: string }",
+      );
+    }
+    this.#stats.imageLogs += 1;
+    // Hard cap so a bot can't blow up the streaming response. 512 KB
+    // of base64 is ~384 KB of binary -- way more than any reasonable
+    // debug screenshot at 320x200.
+    if (shot.data.length > 512 * 1024) {
+      throw new Error(
+        `logImage: image too large (${shot.data.length} base64 chars; cap is 524288)`,
+      );
+    }
+    // We only support PNG today (that's what get_screenshot returns).
+    // The UI bounds the rendered size and preserves the real aspect
+    // ratio via \`object-fit: contain\`, so any sensible dimensions are
+    // fine — but reject pathologically large frames up front so a
+    // typo'd bot can't push a 4K screenshot through the stream.
+    if (shot.mimeType !== "image/png") {
+      throw new Error(
+        `logImage: expected mimeType "image/png", got "${shot.mimeType}"`,
+      );
+    }
+    const dims = decodePngDimensions(shot.data);
+    if (!dims) {
+      throw new Error("logImage: payload is not a valid PNG (missing IHDR)");
+    }
+    const MAX_DIM = 2048;
+    if (dims.width > MAX_DIM || dims.height > MAX_DIM) {
+      throw new Error(
+        `logImage: image too large (${dims.width}x${dims.height}; max dimension is ${MAX_DIM})`,
+      );
+    }
+    const payload = JSON.stringify({
+      mimeType: shot.mimeType,
+      data: shot.data,
+      caption: typeof caption === "string" ? caption : "",
+    });
+    this.#onLog(`\u0001img:${payload}`);
+  }
+
   /** Read-only snapshot of how the bot has used the context so far. */
   stats(): Readonly<{
     stateReads: number;
     keyPresses: number;
     sleeps: number;
     logs: number;
+    imageLogs: number;
   }> {
     return { ...this.#stats };
   }
@@ -319,6 +386,41 @@ function safeStringify(v: unknown): string {
   } catch {
     return String(v);
   }
+}
+
+/**
+ * Decode a PNG's IHDR width/height from its base64 payload. PNG layout:
+ *   bytes  0..7   signature (89 50 4E 47 0D 0A 1A 0A)
+ *   bytes  8..11  IHDR chunk length (always 13 for a valid PNG)
+ *   bytes 12..15  "IHDR"
+ *   bytes 16..19  width  (big-endian u32)
+ *   bytes 20..23  height (big-endian u32)
+ *
+ * Returns null if the input doesn't look like a PNG. We only need the
+ * first 24 bytes, so decoding the leading 32 base64 chars is enough.
+ */
+function decodePngDimensions(
+  base64: string,
+): { width: number; height: number } | null {
+  if (base64.length < 32) return null;
+  let head: string;
+  try {
+    head = atob(base64.slice(0, 32));
+  } catch {
+    return null;
+  }
+  if (head.length < 24) return null;
+  // Signature check on the first 8 bytes (89 50 4E 47 0D 0A 1A 0A).
+  const sig = [137, 80, 78, 71, 13, 10, 26, 10];
+  for (let i = 0; i < 8; i++) {
+    if (head.charCodeAt(i) !== sig[i]) return null;
+  }
+  const u32 = (off: number) =>
+    (head.charCodeAt(off) << 24) |
+    (head.charCodeAt(off + 1) << 16) |
+    (head.charCodeAt(off + 2) << 8) |
+    head.charCodeAt(off + 3);
+  return { width: u32(16) >>> 0, height: u32(20) >>> 0 };
 }
 
 function isPlainState(v: unknown): v is BotState {

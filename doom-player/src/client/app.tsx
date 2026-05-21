@@ -462,8 +462,12 @@ return { ticks: MAX_TICKS, finalScreen: lastScreen, finalHp: lastHp, actions };
 // One-shot diagnostic bot: dumps the first state snapshot and exits.
 // Useful for inspecting what fields the engine exposes without
 // writing a loop.
-const INSPECT_BOT = `// Dump a single state snapshot and quit.
+const INSPECT_BOT = `// Dump a single state snapshot and the current frame, then quit.
+// Useful for sanity-checking what the engine exposes.
 await bot.log(JSON.stringify(await bot.getState(), null, 2));
+// The screenshot lands in the collapsible image panel on the right.
+const shot = await bot.screenshot();
+await bot.logImage(shot, "inspect: current frame");
 `;
 
 // Vision-LLM bot: opens the automap, screenshots it, asks Workers AI
@@ -963,6 +967,9 @@ for (let macro = 0; macro < STEPS; macro++) {
 
   // --- ONE LLM consult per macro step: image + state digest. ---
   const shot = await snapAutomap(s.screen);
+  // Surface the automap to the UI's debug-image panel so a human
+  // watching the run can see exactly what the LLM saw.
+  await bot.logImage(shot, \`macro \${macro} automap (pose \${s.player ? \`(\${s.player.x.toFixed(0)},\${s.player.y.toFixed(0)})@\${s.player.angle_deg.toFixed(0)}°\` : "?"})\`);
   const llmResult = await askMacroTurn(s, shot, history);
   let turn = llmResult.pick;
 
@@ -1101,6 +1108,8 @@ const STORAGE_KEY = "doom-player-bot-code";
 // across tabs / restarts would just dump us on a dead session every
 // time. Cleared on tab close, restored on reload.
 const SESSION_KEY = "doom-player-br-session-id";
+// Max number of bot.logImage entries kept in the side panel.
+const IMAGE_HISTORY = 4;
 
 type Mode = "idle" | "running";
 
@@ -1134,6 +1143,15 @@ export function App() {
 		}
 	});
 	const [log, setLog] = useState<string[]>([]);
+	// Debug images surfaced by \`bot.logImage(...)\`. We keep the most
+	// recent IMAGE_HISTORY entries in display order (oldest first) so
+	// the user can scroll back a few frames; older ones drop off.
+	// Cleared on each new run.
+	const [images, setImages] = useState<
+		Array<{ mimeType: string; data: string; caption: string; receivedAt: number }>
+	>([]);
+	// User can collapse the image sidebar to give the log full width.
+	const [imagePanelCollapsed, setImagePanelCollapsed] = useState(false);
 	const [mode, setMode] = useState<Mode>("idle");
 	const [devtoolsUrl, setDevtoolsUrl] = useState<string | null>(null);
 	// Embed the DevTools pane by default; bot logs stay accessible via
@@ -1191,9 +1209,51 @@ export function App() {
 	}, []);
 
 	// Some lines in the stream carry structured side-channel data
-	// (devtools URL, BR session id, ...). Recognise them here and
-	// forward to state so the UI can capture them.
+	// (devtools URL, BR session id, image dumps, ...). Recognise them
+	// here and forward to state so the UI can capture them.
 	const handleLine = useCallback((line: string) => {
+		// \`bot.logImage(...)\` emits a single sentinel-prefixed line. We
+		// peel it off and stash the image in state rather than appending
+		// it as text; the JSON payload is base64-heavy and would just
+		// clutter the log pane.
+		if (line.startsWith("\u0001img:")) {
+			try {
+				const payload = JSON.parse(line.slice(5)) as {
+					mimeType?: unknown;
+					data?: unknown;
+					caption?: unknown;
+				};
+				if (
+					typeof payload.mimeType === "string" &&
+					typeof payload.data === "string"
+				) {
+					const entry = {
+						mimeType: payload.mimeType,
+						data: payload.data,
+						caption:
+							typeof payload.caption === "string" ? payload.caption : "",
+						receivedAt: Date.now(),
+					};
+					setImages((prev) => {
+						// Cap at IMAGE_HISTORY entries; drop oldest first.
+						const next = [...prev, entry];
+						return next.length > IMAGE_HISTORY
+							? next.slice(next.length - IMAGE_HISTORY)
+							: next;
+					});
+					append(
+						`# image: ${payload.mimeType}, ${payload.data.length} base64 chars${
+							typeof payload.caption === "string" && payload.caption.length > 0
+								? ` — ${payload.caption}`
+								: ""
+						}`,
+					);
+					return;
+				}
+			} catch {
+				// fall through and treat as a plain log line
+			}
+		}
 		const dt = line.match(/^# devtools: (.+)$/);
 		if (dt) {
 			const raw = dt[1].trim();
@@ -1262,6 +1322,7 @@ export function App() {
 		if (mode === "running") return;
 		setMode("running");
 		setLog([]);
+		setImages([]);
 		const reuseId = sessionIdRef.current;
 		// Only blank the embedded DevTools iframe when we're starting
 		// from scratch. If we're about to reuse the same BR session,
@@ -1301,7 +1362,10 @@ export function App() {
 		abortRef.current?.abort();
 	}, []);
 
-	const clearLog = useCallback(() => setLog([]), []);
+	const clearLog = useCallback(() => {
+		setLog([]);
+		setImages([]);
+	}, []);
 	const resetCode = useCallback(() => setCode(STARTER_CODE), []);
 	const resetSession = useCallback(() => {
 		setSessionId(null);
@@ -1441,6 +1505,17 @@ export function App() {
 								</button>
 							</>
 						) : null}
+						{images.length > 0 ? (
+							<button
+								type="button"
+								onClick={() => setImagePanelCollapsed((v) => !v)}
+								title="Collapse / expand the bot.logImage panel"
+							>
+								{imagePanelCollapsed
+									? `Show images (${images.length})`
+									: "Hide images"}
+							</button>
+						) : null}
 						<button
 							type="button"
 							onClick={clearLog}
@@ -1449,43 +1524,86 @@ export function App() {
 							Clear
 						</button>
 					</div>
-					{showDevtools && devtoolsUrl ? (
-						// Split layout: DevTools on top, live log below. The
-						// log strip is fixed-height so users can still scan
-						// streamed output (preroll progress, bot.log lines,
-						// errors) without leaving the DevTools view.
-						<div className="split-pane">
-							<iframe
-								className="devtools-iframe"
-								src={devtoolsUrl}
-								title="Browser DevTools"
-								// allow-same-origin is required for DevTools'
-								// own UI to bootstrap; the inner page is
-								// already on a different origin.
-								sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
-							/>
-							<div className="split-divider" aria-hidden="true" />
-							<pre ref={logPaneRef} className="log log-strip">
-								{log.length === 0 ? (
-									<span className="placeholder">
-										Output streams here. Click <strong>Run bot</strong> to start.
-									</span>
-								) : (
-									log.join("\n")
-								)}
-							</pre>
-						</div>
-					) : (
-						<pre ref={logPaneRef} className="log">
-							{log.length === 0 ? (
-								<span className="placeholder">
-									Output streams here. Click <strong>Run bot</strong> to start.
-								</span>
+					{/* Two-column layout: log/DevTools on the left, debug-image
+					    side panel on the right. The image panel only renders
+					    when an image has been received AND the user hasn't
+					    collapsed it. Collapsing leaves a thin gutter with an
+					    expand button so the panel can be brought back. */}
+					<div className="log-with-image">
+						<div className="log-main">
+							{showDevtools && devtoolsUrl ? (
+								// Split layout: DevTools on top, live log below. The
+								// log strip is fixed-height so users can still scan
+								// streamed output (preroll progress, bot.log lines,
+								// errors) without leaving the DevTools view.
+								<div className="split-pane">
+									<iframe
+										className="devtools-iframe"
+										src={devtoolsUrl}
+										title="Browser DevTools"
+										// allow-same-origin is required for DevTools'
+										// own UI to bootstrap; the inner page is
+										// already on a different origin.
+										sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+									/>
+									<div className="split-divider" aria-hidden="true" />
+									<pre ref={logPaneRef} className="log log-strip">
+										{log.length === 0 ? (
+											<span className="placeholder">
+												Output streams here. Click <strong>Run bot</strong> to start.
+											</span>
+										) : (
+											log.join("\n")
+										)}
+									</pre>
+								</div>
 							) : (
-								log.join("\n")
+								<pre ref={logPaneRef} className="log">
+									{log.length === 0 ? (
+										<span className="placeholder">
+											Output streams here. Click <strong>Run bot</strong> to start.
+										</span>
+									) : (
+										log.join("\n")
+									)}
+								</pre>
 							)}
-						</pre>
-					)}
+						</div>
+						{images.length > 0 && !imagePanelCollapsed ? (
+							<aside className="debug-image-side">
+								<div className="debug-image-header">
+									<span className="debug-image-title">
+										images ({images.length}/{IMAGE_HISTORY})
+									</span>
+									<button
+										type="button"
+										className="debug-image-collapse"
+										onClick={() => setImagePanelCollapsed(true)}
+										title="Collapse image panel"
+									>
+										×
+									</button>
+								</div>
+								{/* Newest image at the top so the most recent is
+								    always visible without scrolling. */}
+								{[...images].reverse().map((img) => (
+									<div
+										key={img.receivedAt}
+										className="debug-image-entry"
+									>
+										<img
+											src={`data:${img.mimeType};base64,${img.data}`}
+											alt={img.caption || "bot.logImage"}
+											className="debug-image-img"
+										/>
+										{img.caption ? (
+											<div className="debug-image-caption">{img.caption}</div>
+										) : null}
+									</div>
+								))}
+							</aside>
+						) : null}
+					</div>
 				</section>
 			</div>
 		</div>

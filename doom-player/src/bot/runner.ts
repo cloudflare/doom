@@ -101,6 +101,11 @@ export async function runBot(opts: RunBotOptions): Promise<RunBotResult> {
         ctx.sleep(typeof ms === "number" ? ms : Number(ms) || 0),
       log: async (...args: unknown[]) => ctx.log(...args),
       screenshot: async () => ctx.screenshot(),
+      logImage: async (shot: unknown, caption?: unknown) =>
+        ctx.logImage(
+          shot as { data: string; mimeType: string },
+          typeof caption === "string" ? caption : undefined,
+        ),
     },
     positionalArgs: true,
   };
