@@ -106,6 +106,12 @@ export async function runBot(opts: RunBotOptions): Promise<RunBotResult> {
           shot as { data: string; mimeType: string },
           typeof caption === "string" ? caption : undefined,
         ),
+      encodePng: async (width: unknown, height: unknown, rgba: unknown) =>
+        ctx.encodePng(
+          Number(width),
+          Number(height),
+          rgba as Uint8Array | number[],
+        ),
     },
     positionalArgs: true,
   };

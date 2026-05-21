@@ -462,6 +462,262 @@ return { ticks: MAX_TICKS, finalScreen: lastScreen, finalHp: lastHp, actions };
 // One-shot diagnostic bot: dumps the first state snapshot and exits.
 // Useful for inspecting what fields the engine exposes without
 // writing a loop.
+// Vision-style exploration bot that doesn't use any LLM. Maintains
+// a pixel-quantised memory map of explored space using raycasts +
+// player position, then picks the next direction by looking for the
+// least-covered octant around the player. Dumps the memory canvas to
+// the debug-image panel every few macros so a human can watch the
+// map fill in.
+const EXPLORE_BOT = `// Memory-based exploration: paint what raycasts see, head where you
+// haven't been. No LLM — the engine's raycasts + position are enough.
+//
+// Memory canvas: a square pixel buffer centred on the player's first
+// observed position. World units -> pixels via SCALE. Doom doesn't
+// expose level bounds via get_state (see AM_findMinMaxBoundaries in
+// am_map.c), so we size for the typical Doom 1 / 2 envelope of
+// ~±4000 map units on each axis.
+//
+// Each tick we cast 8 visibility rays into world space (those are
+// what the engine reports in state.raycasts) and paint pixels along
+// each ray:
+//   - cells the ray passed through  -> FLOOR (seen, walkable)
+//   - the hit cell                   -> WALL/DOOR/SWITCH/EXIT/THING
+// We also stamp the player's own cell as VISITED. Once-explored
+// pixels persist; revisits never downgrade.
+//
+// Direction picking: divide the world around the player into 8
+// octants. For each octant, count VISITED + FLOOR pixels within a
+// radius — the lower the count, the less-explored that direction.
+// Pick the octant minimising covered pixels, with a tiebreak that
+// prefers staying near AHEAD to avoid noisy oscillation.
+
+const SCALE = 32;            // map units per memory pixel
+const SIZE  = 200;           // memory canvas edge, in pixels
+const CENTRE = SIZE / 2;     // origin pixel for the player's spawn
+
+const STEPS = 12;            // macro consults (no LLM, so cheap to loop)
+const TICKS_PER_MACRO = 16;
+const TICK_MS = 200;
+const LOG_EVERY = 3;         // dump the memory canvas every N macros
+const TURN_TOLERANCE_DEG = 15;
+
+// Palette (RGBA bytes). UNSEEN must stay (0,0,0,255) so an all-zero
+// buffer initialises to "unexplored".
+const COL = {
+  UNSEEN:  [  0,   0,   0, 255],
+  FLOOR:   [ 40,  40,  40, 255],
+  VISITED: [  0,  90, 180, 255],
+  WALL:    [220, 220, 220, 255],
+  DOOR:    [240, 200,  40, 255],
+  SWITCH:  [  0, 200, 200, 255],
+  EXIT:    [ 80, 240,  80, 255],
+  THING:   [220,  60, 220, 255],
+  PLAYER:  [255,  60,  60, 255],
+};
+
+const RANK = {
+  UNSEEN: -1, FLOOR: 0, VISITED: 1, PLAYER: 2, THING: 3,
+  SWITCH: 4, DOOR: 5, EXIT: 6, WALL: 7,
+};
+
+// One memory canvas, lives across macros. Uint8Array initialises to
+// zero, which already encodes UNSEEN (alpha is 0 too -> transparent;
+// we explicitly stamp full-alpha black below so the PNG renders).
+const mem = new Uint8Array(SIZE * SIZE * 4);
+for (let i = 0; i < SIZE * SIZE; i++) {
+  mem[i * 4 + 3] = 255;
+}
+
+// Track each pixel's rank so we never downgrade (e.g. WALL must not
+// be overwritten by FLOOR later). One byte per pixel.
+const rank = new Int8Array(SIZE * SIZE);
+rank.fill(RANK.UNSEEN);
+
+let originX = null;
+let originY = null;
+
+function paint(px, py, name) {
+  if (px < 0 || py < 0 || px >= SIZE || py >= SIZE) return;
+  const idx = py * SIZE + px;
+  if (rank[idx] >= RANK[name]) return;
+  rank[idx] = RANK[name];
+  const col = COL[name];
+  const o = idx * 4;
+  mem[o] = col[0]; mem[o+1] = col[1]; mem[o+2] = col[2]; mem[o+3] = col[3];
+}
+
+function worldToPx(wx, wy) {
+  return {
+    px: Math.round(CENTRE + (wx - originX) / SCALE),
+    py: Math.round(CENTRE - (wy - originY) / SCALE),
+  };
+}
+
+function paintRay(playerX, playerY, worldBearingDeg, distance, hitKind) {
+  const rad = (worldBearingDeg * Math.PI) / 180;
+  const dx = Math.cos(rad);
+  const dy = Math.sin(rad);
+  const stepUnits = SCALE / 2;
+  const steps = Math.max(1, Math.floor(distance / stepUnits));
+  for (let s = 1; s < steps; s++) {
+    const wx = playerX + dx * s * stepUnits;
+    const wy = playerY + dy * s * stepUnits;
+    const p = worldToPx(wx, wy);
+    paint(p.px, p.py, "FLOOR");
+  }
+  const hp = worldToPx(playerX + dx * distance, playerY + dy * distance);
+  const name = hitKind === "door" ? "DOOR"
+            : hitKind === "switch" ? "SWITCH"
+            : hitKind === "exit" ? "EXIT"
+            : hitKind === "thing" ? "THING"
+            : hitKind === "open" ? "FLOOR"
+            : "WALL";
+  paint(hp.px, hp.py, name);
+}
+
+function recordObservation(state) {
+  const p = state.player;
+  if (!p) return;
+  if (originX === null) { originX = p.x; originY = p.y; }
+  const me = worldToPx(p.x, p.y);
+  paint(me.px, me.py, "PLAYER");
+  paint(me.px - 1, me.py, "VISITED");
+  paint(me.px + 1, me.py, "VISITED");
+  paint(me.px, me.py - 1, "VISITED");
+  paint(me.px, me.py + 1, "VISITED");
+  // bearing_deg is "screen convention" (+ = right of facing); world
+  // rotation is CCW positive, so subtract from player.angle_deg.
+  for (const r of (state.raycasts || [])) {
+    const worldBearing = p.angle_deg - r.bearing_deg;
+    paintRay(p.x, p.y, worldBearing, r.distance, r.hit);
+  }
+}
+
+function angleDelta(a, c) {
+  let d = (a - c) % 360;
+  if (d > 180) d -= 360;
+  if (d <= -180) d += 360;
+  return d;
+}
+
+// Of 8 world-frame octants, pick the one whose lookahead area is
+// least-explored. Prefers staying near the current facing on ties.
+function pickLeastExploredOctant(state) {
+  const p = state.player;
+  if (!p) return null;
+  const me = worldToPx(p.x, p.y);
+  const RADIUS_PX = 24;
+  const PROBE_R = 10;
+  const candidates = [];
+  for (let o = 0; o < 8; o++) {
+    const bearing = o * 45;
+    const rad = (bearing * Math.PI) / 180;
+    const cx = me.px + Math.cos(rad) * RADIUS_PX;
+    const cy = me.py - Math.sin(rad) * RADIUS_PX;
+    let explored = 0;
+    let total = 0;
+    let wallHits = 0;
+    for (let dy = -PROBE_R; dy <= PROBE_R; dy++) {
+      for (let dx = -PROBE_R; dx <= PROBE_R; dx++) {
+        if (dx*dx + dy*dy > PROBE_R*PROBE_R) continue;
+        const x = Math.round(cx + dx);
+        const y = Math.round(cy + dy);
+        if (x < 0 || y < 0 || x >= SIZE || y >= SIZE) continue;
+        total++;
+        const r = rank[y * SIZE + x];
+        if (r >= RANK.FLOOR) explored++;
+        if (r === RANK.WALL) wallHits++;
+      }
+    }
+    const ratio = total > 0 ? explored / total : 1;
+    candidates.push({ bearing, ratio, wallHits });
+  }
+  candidates.sort((a, b) => {
+    // Heavily penalise octants already mostly wall — even if
+    // "unexplored", they're not reachable.
+    const wa = a.wallHits * 0.02;
+    const wb = b.wallHits * 0.02;
+    if (a.ratio + wa !== b.ratio + wb) return (a.ratio + wa) - (b.ratio + wb);
+    const da = Math.abs(angleDelta(a.bearing, p.angle_deg));
+    const db = Math.abs(angleDelta(b.bearing, p.angle_deg));
+    return da - db;
+  });
+  return candidates[0];
+}
+
+async function microTick(state, targetBearing) {
+  if (state.screen !== "playing") {
+    await bot.press("enter");
+    return "menu";
+  }
+  const enemies = state.enemies_visible || [];
+  const centred = enemies.find((e) => e.bearing === "center");
+  if (centred) { await bot.press("fire", 200); return "fire"; }
+  const off = enemies.find((e) => e.bearing === "left" || e.bearing === "far_left") ? "left"
+            : enemies.find((e) => e.bearing === "right" || e.bearing === "far_right") ? "right"
+            : null;
+  if (off) { await bot.press(off, 120); return "face-enemy"; }
+
+  const rays = state.raycasts || [];
+  const fwd = rays.find((r) => Math.abs(r.bearing_deg) < 10);
+  if (fwd && (fwd.hit === "door" || fwd.hit === "switch") && fwd.distance < 80 && Math.abs(fwd.bearing_deg) < 8) {
+    await bot.press("use", 30);
+    await bot.press("up", 200);
+    return "use";
+  }
+  if (fwd && fwd.hit === "wall" && fwd.distance < 48) {
+    let best = rays[0];
+    for (const r of rays) if (r.distance > best.distance) best = r;
+    await bot.press(best.bearing_deg < 0 ? "left" : "right", 220);
+    return "wall-avoid";
+  }
+  if (targetBearing !== null && state.player) {
+    const err = angleDelta(targetBearing, state.player.angle_deg);
+    if (Math.abs(err) > TURN_TOLERANCE_DEG) {
+      await bot.press(err > 0 ? "left" : "right", Math.min(420, Math.max(140, Math.abs(err) * 4)));
+      return "steer";
+    }
+  }
+  await bot.press("up", 250);
+  return "fwd";
+}
+
+for (let macro = 0; macro < STEPS; macro++) {
+  let s = await bot.getState();
+  if (s.screen !== "playing" && s.screen !== "automap") {
+    await bot.press("enter");
+    await bot.sleep(200);
+    continue;
+  }
+  recordObservation(s);
+  const pick = pickLeastExploredOctant(s);
+  const targetBearing = pick ? pick.bearing : null;
+  await bot.log(
+    \`macro \${macro} pose=(\${s.player.x.toFixed(0)},\${s.player.y.toFixed(0)})@\${s.player.angle_deg.toFixed(0)}° \` +
+    (pick
+      ? \`-> head \${targetBearing}° (covered=\${pick.ratio.toFixed(2)}, wallHits=\${pick.wallHits})\`
+      : "no target"),
+  );
+
+  for (let t = 0; t < TICKS_PER_MACRO; t++) {
+    s = await bot.getState();
+    if (s.screen === "dead" || s.screen === "finale") {
+      return \`ended on \${s.screen} after \${macro} macros\`;
+    }
+    recordObservation(s);
+    await microTick(s, targetBearing);
+    await bot.sleep(TICK_MS - 80);
+  }
+
+  if (macro % LOG_EVERY === 0 || macro === STEPS - 1) {
+    const png = await bot.encodePng(SIZE, SIZE, mem);
+    await bot.logImage(png, \`memory @ macro \${macro} origin=(\${originX?.toFixed(0)},\${originY?.toFixed(0)})\`);
+  }
+}
+
+return \`finished \${STEPS} macros\`;
+`;
+
 const INSPECT_BOT = `// Dump a single state snapshot and the current frame, then quit.
 // Useful for sanity-checking what the engine exposes.
 await bot.log(JSON.stringify(await bot.getState(), null, 2));
@@ -1099,6 +1355,7 @@ const EXAMPLES: Example[] = [
 	{ id: "combat", label: "Combat: shoot + advance", code: COMBAT_BOT },
 	{ id: "inspect", label: "Inspect: dump state", code: INSPECT_BOT },
 	{ id: "ai-nav", label: "AI: vision-guided navigation", code: AI_NAV_BOT },
+	{ id: "explore", label: "Explore: memory-map (no LLM)", code: EXPLORE_BOT },
 ];
 
 const STARTER_CODE = AUTOPLAY_BOT;

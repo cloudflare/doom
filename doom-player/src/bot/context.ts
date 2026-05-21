@@ -366,6 +366,26 @@ export class BotContext {
     this.#onLog(`\u0001img:${payload}`);
   }
 
+  /**
+   * Encode an RGBA pixel buffer into a base64-encoded PNG suitable
+   * for handing straight to `logImage`. We do this host-side so bot
+   * code can build memory / debug visualisations without dragging a
+   * full PNG encoder into the sandbox.
+   *
+   * `rgba` must be exactly `width * height * 4` bytes (RGBA, 8 bits
+   * per channel, top-to-bottom row order, no premultiplied alpha).
+   * The encoder uses uncompressed deflate blocks — the file is a few
+   * KB larger than a normal PNG but the code is simple and has zero
+   * dependencies.
+   */
+  async encodePng(
+    width: number,
+    height: number,
+    rgba: Uint8Array | number[],
+  ): Promise<{ data: string; mimeType: string }> {
+    return encodePngRgba(width, height, rgba);
+  }
+
   /** Read-only snapshot of how the bot has used the context so far. */
   stats(): Readonly<{
     stateReads: number;
@@ -421,6 +441,160 @@ function decodePngDimensions(
     (head.charCodeAt(off + 2) << 8) |
     head.charCodeAt(off + 3);
   return { width: u32(16) >>> 0, height: u32(20) >>> 0 };
+}
+
+// ── PNG encoder ─────────────────────────────────────────────────────
+//
+// A small, dependency-free PNG encoder used by `BotContext.encodePng`.
+// We emit a single IDAT chunk whose deflate stream is made entirely
+// of uncompressed ("stored") blocks — that's the simplest legal
+// deflate form: a 5-byte header per <= 65535-byte block, then raw
+// bytes. Files are 0.5-1% larger than a properly-compressed PNG, but
+// the encoder fits in ~60 lines and runs in any JS runtime (no
+// CompressionStream / pako / canvas dependency).
+//
+// References:
+//   PNG spec      https://www.w3.org/TR/png-3/
+//   deflate spec  https://www.rfc-editor.org/rfc/rfc1951
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    t[n] = c;
+  }
+  return t;
+})();
+
+function crc32(bytes: Uint8Array, start: number, end: number): number {
+  let c = 0xffffffff;
+  for (let i = start; i < end; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function adler32(bytes: Uint8Array): number {
+  let a = 1;
+  let b = 0;
+  for (let i = 0; i < bytes.length; i++) {
+    a = (a + bytes[i]) % 65521;
+    b = (b + a) % 65521;
+  }
+  return ((b << 16) | a) >>> 0;
+}
+
+function writeU32BE(buf: Uint8Array, off: number, val: number): void {
+  buf[off] = (val >>> 24) & 0xff;
+  buf[off + 1] = (val >>> 16) & 0xff;
+  buf[off + 2] = (val >>> 8) & 0xff;
+  buf[off + 3] = val & 0xff;
+}
+
+function makeChunk(type: string, data: Uint8Array): Uint8Array {
+  const out = new Uint8Array(12 + data.length);
+  writeU32BE(out, 0, data.length);
+  out[4] = type.charCodeAt(0);
+  out[5] = type.charCodeAt(1);
+  out[6] = type.charCodeAt(2);
+  out[7] = type.charCodeAt(3);
+  out.set(data, 8);
+  writeU32BE(out, 8 + data.length, crc32(out, 4, 8 + data.length));
+  return out;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  // Walk the input in 8 KB chunks to avoid blowing the call-argument
+  // limit of String.fromCharCode on large images.
+  let bin = "";
+  const CHUNK = 0x2000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode.apply(
+      null,
+      Array.from(bytes.subarray(i, Math.min(i + CHUNK, bytes.length))),
+    );
+  }
+  return btoa(bin);
+}
+
+export function encodePngRgba(
+  width: number,
+  height: number,
+  rgba: Uint8Array | number[],
+): { data: string; mimeType: string } {
+  if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
+    throw new Error(`encodePng: bad dimensions ${width}x${height}`);
+  }
+  const expected = width * height * 4;
+  const src = rgba instanceof Uint8Array ? rgba : new Uint8Array(rgba);
+  if (src.length !== expected) {
+    throw new Error(
+      `encodePng: expected ${expected} bytes for ${width}x${height} RGBA, got ${src.length}`,
+    );
+  }
+
+  // Build the raw image stream with a filter byte (0 = None) per row.
+  const rowStride = width * 4;
+  const raw = new Uint8Array((rowStride + 1) * height);
+  for (let y = 0; y < height; y++) {
+    raw[y * (rowStride + 1)] = 0;
+    raw.set(src.subarray(y * rowStride, (y + 1) * rowStride), y * (rowStride + 1) + 1);
+  }
+
+  // zlib wrapper around uncompressed deflate blocks.
+  const blocks: Uint8Array[] = [];
+  const blockSize = 65535;
+  for (let i = 0; i < raw.length; i += blockSize) {
+    const len = Math.min(blockSize, raw.length - i);
+    const last = i + len >= raw.length ? 1 : 0;
+    const header = new Uint8Array(5);
+    header[0] = last;
+    header[1] = len & 0xff;
+    header[2] = (len >>> 8) & 0xff;
+    header[3] = ~len & 0xff;
+    header[4] = (~len >>> 8) & 0xff;
+    blocks.push(header);
+    blocks.push(raw.subarray(i, i + len));
+  }
+  const adler = adler32(raw);
+  let idatLen = 2 + 4; // zlib header + adler trailer
+  for (const b of blocks) idatLen += b.length;
+  const idat = new Uint8Array(idatLen);
+  idat[0] = 0x78; // CM=8, CINFO=7
+  idat[1] = 0x01; // FLEVEL=0, FCHECK chosen so (78*256 + 01) % 31 === 0
+  let pos = 2;
+  for (const b of blocks) {
+    idat.set(b, pos);
+    pos += b.length;
+  }
+  writeU32BE(idat, pos, adler);
+
+  // IHDR.
+  const ihdr = new Uint8Array(13);
+  writeU32BE(ihdr, 0, width);
+  writeU32BE(ihdr, 4, height);
+  ihdr[8] = 8; // bit depth
+  ihdr[9] = 6; // colour type: RGBA
+  ihdr[10] = 0; // compression method
+  ihdr[11] = 0; // filter method
+  ihdr[12] = 0; // interlace: none
+
+  const sig = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const ihdrChunk = makeChunk("IHDR", ihdr);
+  const idatChunk = makeChunk("IDAT", idat);
+  const iendChunk = makeChunk("IEND", new Uint8Array(0));
+
+  const total =
+    sig.length + ihdrChunk.length + idatChunk.length + iendChunk.length;
+  const png = new Uint8Array(total);
+  let o = 0;
+  png.set(sig, o); o += sig.length;
+  png.set(ihdrChunk, o); o += ihdrChunk.length;
+  png.set(idatChunk, o); o += idatChunk.length;
+  png.set(iendChunk, o);
+
+  return { data: bytesToBase64(png), mimeType: "image/png" };
 }
 
 function isPlainState(v: unknown): v is BotState {
