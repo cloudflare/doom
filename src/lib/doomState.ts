@@ -126,11 +126,112 @@ export type DoomHud = {
   keys: Key[];
 };
 
+// Player pose, only present while a level is loaded and the player mobj
+// exists. Null on title / menu / intermission / finale, and null on the
+// frame the player dies until they respawn.
+//
+// Coordinates are raw Doom map units (the engine's 16.16 fixed-point
+// truncated to int). 64 units ~= player bounding-box edge. angle_deg
+// is the world-absolute facing in [0, 360), measured the standard Doom
+// way: 0 = east, 90 = north, 180 = west, 270 = south.
+//
+// momx / momy are the *instantaneous* per-tic velocity components in
+// map units. They reflect what the engine is about to apply, not what
+// it just applied -- friction zeroes them between inputs, so polling
+// well after a movement key has been released will read 0,0 even
+// though the player did move. To detect "did the agent move?", diff
+// player.x/y between successive get_state calls. To detect "am I
+// wedged against a wall?", press a movement key and poll *during* the
+// hold; if momx == momy == 0, P_TryMove rejected the step.
+export type DoomPlayer = {
+  x: number;
+  y: number;
+  z: number;
+  angle_deg: number;
+  momx: number;
+  momy: number;
+};
+
+// What a single raycast hit. Distances are in map units (same scale as
+// player.x/y). 64 units is roughly "touching"; MISSILERANGE = 2048 is
+// the cast horizon, and a ray that reaches the horizon without hitting
+// anything reports `hit: "open"` with distance 2048.
+//
+// bearing_deg uses the screen-space convention (positive = right of
+// facing, negative = left), not the BAM convention. The 8 rays are
+// spread evenly across the rendered 90-degree FOV, so bearing_deg
+// values are { -45, -32, -19, -6, +6, +19, +32, +45 } in order.
+export const RAY_HIT_KINDS = [
+  "wall",   // one-sided line or impassable / fully-closed two-sided line
+  "door",   // door-action line; ray stops here only when door is closed
+  "switch", // switch / generic-action line (lifts, floor specials, ...)
+  "exit",   // level exit (specials 11, 51, 52, 124)
+  "thing",  // first solid mobj along the ray (enemy, barrel, ...)
+  "open",   // ray reached max range without a blocking intercept
+] as const;
+export type RayHitKind = (typeof RAY_HIT_KINDS)[number];
+
+// Coarse category for a visible thing. Lets an agent prioritise
+// without keeping an item-name lookup table of its own.
+export const THING_CATEGORIES = [
+  "enemy",   // a live monster (MF_COUNTKILL, health > 0)
+  "weapon",  // shotgun, chaingun, rocket launcher, plasma, BFG, chainsaw
+  "ammo",    // clip, ammo box, shell, shell box, rocket, cell, backpack
+  "health",  // health bonus, stimpack, medikit, soulsphere, megasphere
+  "armor",   // green armour, blue armour, armour bonus (helmet)
+  "powerup", // invuln, berserk, rad suit, computer map, light amp
+  "key",     // any of the six keycards / skullkeys
+  "barrel",  // exploding barrel (shootable, blocks movement)
+  "decor",   // solid decoration: column, tech pillar, candle holder, ...
+  "unknown", // classified as a thing but unrecognised sprite
+] as const;
+export type ThingCategory = (typeof THING_CATEGORIES)[number];
+
+export type DoomRaycast = {
+  bearing_deg: number;
+  distance: number;
+  hit: RayHitKind;
+  // When hit === "thing", the engine identifies the blocker by sprite
+  // and includes its type / category inline. Absent for wall / door /
+  // switch / exit / open hits.
+  thing_type?: string;
+  thing_category?: ThingCategory;
+};
+
+// A thing visible along any of the 8 forward-FOV rays, deduped by
+// mobj identity across the rays. Covers both solid blockers (the
+// pedestal a green armour sits on, exploding barrels, monsters in
+// line of sight) and non-solid pickups the ray passes through
+// (armour, health, ammo, weapons, keys, powerups).
+//
+// `distance` is the closest sighting across all rays that crossed
+// this thing, and `bearing_deg` is the bearing of that closest ray.
+// The array is capped at 16 entries to keep payloads bounded.
+export type DoomThingSighting = {
+  type: string;
+  category: ThingCategory;
+  bearing_deg: number;
+  distance: number;
+};
+
 export type DoomVisionState = {
   screen: ScreenKind;
   // hud is always present but every field can be -1 / "unknown" when the
   // status bar is not visible.
   hud: DoomHud;
+  // Spatial pose. Null when a level isn't loaded or the player mobj is
+  // absent. Always queried via the same poll as the rest of the state,
+  // so player.* and enemies_visible[].* / raycasts[].* are coherent.
+  player: DoomPlayer | null;
+  // Eight rays across the forward 90-degree FOV. Empty array when no
+  // level is loaded or the player is dead. Always exactly 8 entries
+  // when populated, ordered left-to-right (most negative bearing first).
+  raycasts: DoomRaycast[];
+  // All things crossed by any of the 8 forward-FOV rays, deduped by
+  // mobj identity, sorted in insertion order (effectively roughly
+  // left-to-right then by ray order). Covers pickups, decor and
+  // blockers. Capped at 16 entries.
+  things_visible: DoomThingSighting[];
   enemies_visible: DoomEnemySighting[];
   // High-level booleans the agent loop cares about, derived engine-side.
   in_combat: boolean;
@@ -155,6 +256,9 @@ export const EMPTY_DOOM_VISION_STATE: DoomVisionState = {
     face_state: "unknown",
     keys: [],
   },
+  player: null,
+  raycasts: [],
+  things_visible: [],
   enemies_visible: [],
   in_combat: false,
   low_health: false,

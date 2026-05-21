@@ -497,7 +497,7 @@ const useGetStateTool = () => {
   useWebMCP({
     name: "get_state",
     description:
-      "Read the current Doom game state directly from the engine. Returns structured JSON: screen kind (title/menu/playing/demo/automap/intermission/dead/finale), HUD (health, armor, ammo, weapon, face, keys), enemies in the forward field of view (with bearing and distance bins), and high-level booleans (in_combat, low_health). This is accurate and instant — prefer it over get_screenshot for state-driven decisions. Note: screen='demo' means Doom is playing back a built-in attract-mode demo and ignoring input — the agent should call start_new_game or press_key('escape') to break out, not try to play.",
+      "Read the current Doom game state directly from the engine. Returns structured JSON: screen kind (title/menu/playing/demo/automap/intermission/dead/finale), HUD (health, armor, ammo, weapon, face, keys), player pose (x/y/z map units, angle_deg in [0,360), momx/momy per-tic velocity), 8 raycasts evenly spread across the forward 90-degree FOV (each with bearing_deg in [-45,+45] using screen convention where + = right of facing, distance in map units, hit kind wall/door/switch/exit/thing/open, plus inline thing_type/thing_category when hit='thing'), things_visible array of all pickups/decor/blockers crossed by any ray (deduped, each with type+category like 'green_armor'/armor, 'stimpack'/health, 'shotgun'/weapon, 'clip'/ammo, 'blue_keycard'/key, 'exploding_barrel'/barrel, 'decoration'/decor, plus enemies), enemies in the FOV (with bearing and distance bins), and high-level booleans (in_combat, low_health). Use player.momx/momy after a movement input to detect 'wedged' states (both zero = blocked). Use raycasts to navigate without screenshots: small distance with hit='wall' means turn; hit='door' near distance ~64 means press use; hit='open' with large distance means clear corridor; check things_visible for pickups to grab and barrels to shoot. This is accurate and instant — prefer it over get_screenshot for state-driven decisions. Note: screen='demo' means Doom is playing back a built-in attract-mode demo and ignoring input — the agent should call start_new_game or press_key('escape') to break out, not try to play.",
     inputSchema: EMPTY_OBJECT_SCHEMA,
     execute: async () => {
       const mod = window.Module;
@@ -533,6 +533,18 @@ const useGetStateTool = () => {
           ...EMPTY_DOOM_VISION_STATE,
           ...parsed,
           hud: { ...EMPTY_DOOM_VISION_STATE.hud, ...(parsed.hud ?? {}) },
+          // player is nullable; preserve null when the engine reports it
+          // (e.g. on title / menu / intermission screens), otherwise
+          // accept the parsed object as-is. Fall back to null on schema
+          // skew rather than fabricating a fake pose.
+          player:
+            parsed.player === null || parsed.player === undefined
+              ? null
+              : parsed.player,
+          raycasts: Array.isArray(parsed.raycasts) ? parsed.raycasts : [],
+          things_visible: Array.isArray(parsed.things_visible)
+            ? parsed.things_visible
+            : [],
           enemies_visible: Array.isArray(parsed.enemies_visible)
             ? parsed.enemies_visible
             : [],

@@ -387,6 +387,640 @@ wmcp_hud_visible(void)
     return 1;
 }
 
+// ---------------------------------------------------------------------------
+// Raycasts
+//
+// Eight rays are cast across the player's forward 90-degree field of view
+// (the same FOV the renderer uses for the 3D viewport), evenly spaced from
+// -45 to +45 degrees relative to player facing. Each ray reports the first
+// blocking intercept along its path:
+//
+//   * "wall"   - one-sided line or two-sided with no traversable opening
+//                (e.g. a closed door from the back side)
+//   * "door"   - line whose special is in the door-action range; ray stops
+//                here only if the door is currently closed (no openrange)
+//   * "switch" - line with a usable switch / generic-action special
+//   * "exit"   - level exit line (specials 11, 51, 52, 124)
+//   * "thing"  - the first solid mobj along the ray (enemy, barrel, ...);
+//                non-solid pickups and decorations are skipped
+//   * "open"   - the ray reached its max range without hitting anything;
+//                distance is reported as the max range
+//
+// We reuse the engine's own P_PathTraverse, which is what P_UseLines and
+// the autoaim code use. That keeps the geometry pixel-accurate with what
+// the renderer sees: if the engine says the ray hits a wall at distance
+// D, that's exactly where the wall is.
+//
+// Distances are reported in map units (Doom's standard 16.16 fixed-point
+// truncated to int). 64 map units is roughly the player's bounding box
+// edge -- so distance < 64 means "touching the wall".
+
+#define WMCP_NUM_RAYS 8
+// Half-FOV in BAM. ANG45 = 45 degrees on each side of forward = 90 total,
+// matching the rendered viewport FOV.
+#define WMCP_RAY_HALF_FOV ANG45
+// Max ray range. Anything past this is reported as "open"; matches the
+// horizon at which an agent stops getting useful navigational signal.
+#define WMCP_RAY_RANGE MISSILERANGE
+
+typedef enum {
+    WMCP_HIT_NONE = 0,
+    WMCP_HIT_WALL,
+    WMCP_HIT_DOOR,
+    WMCP_HIT_SWITCH,
+    WMCP_HIT_EXIT,
+    WMCP_HIT_THING,
+} wmcp_hit_kind_t;
+
+static const char *
+wmcp_hit_kind_str(wmcp_hit_kind_t k)
+{
+    switch (k)
+    {
+        case WMCP_HIT_WALL:   return "wall";
+        case WMCP_HIT_DOOR:   return "door";
+        case WMCP_HIT_SWITCH: return "switch";
+        case WMCP_HIT_EXIT:   return "exit";
+        case WMCP_HIT_THING:  return "thing";
+        default:              return "open";
+    }
+}
+
+// Sprite-based classifier for visible things. This is intentionally
+// independent of the enemy classifier in wmcp_classify_mobj (which only
+// names MF_COUNTKILL monsters): here we want to recognise pickups and
+// solid decorations the agent might walk over or shoot, so the
+// classification keys off mo->sprite -- the same value the engine's
+// P_TouchSpecialThing uses to decide what a pickup does.
+//
+// Returns a stable kebab-case name on a recognised sprite, or NULL when
+// the sprite is something we don't surface (corpses, gibs, generic
+// candles the agent doesn't care about). Also writes a coarse category
+// to *out_category so the agent can prioritise without needing to know
+// every Doom item by name.
+static const char *
+wmcp_classify_thing(const mobj_t *mo, const char **out_category)
+{
+    if (mo == NULL) { *out_category = "unknown"; return NULL; }
+
+    // Live enemy? Reuse the existing classifier; it returns the
+    // friendly name and category "enemy".
+    if ((mo->flags & MF_COUNTKILL) && mo->health > 0 &&
+        !(mo->flags & MF_CORPSE))
+    {
+        const char *name = NULL;
+        if (wmcp_classify_mobj(mo, &name))
+        {
+            *out_category = "enemy";
+            return name;
+        }
+    }
+
+    // Other visible things, keyed by sprite. SPR_* are defined in
+    // info.h alongside the mobjtype_t enum.
+    switch (mo->sprite)
+    {
+        // Armour
+        case SPR_ARM1: *out_category = "armor";  return "green_armor";
+        case SPR_ARM2: *out_category = "armor";  return "blue_armor";
+
+        // Health
+        case SPR_BON1: *out_category = "health"; return "health_bonus";
+        case SPR_STIM: *out_category = "health"; return "stimpack";
+        case SPR_MEDI: *out_category = "health"; return "medikit";
+        case SPR_SOUL: *out_category = "health"; return "soulsphere";
+        case SPR_MEGA: *out_category = "health"; return "megasphere";
+
+        // Armour bonus (helmet)
+        case SPR_BON2: *out_category = "armor";  return "armor_bonus";
+
+        // Powerups
+        case SPR_PINV: *out_category = "powerup"; return "invulnerability";
+        case SPR_PINS: *out_category = "powerup"; return "berserk";
+        case SPR_SUIT: *out_category = "powerup"; return "radiation_suit";
+        case SPR_PMAP: *out_category = "powerup"; return "computer_map";
+        case SPR_PVIS: *out_category = "powerup"; return "light_amp";
+
+        // Keys
+        case SPR_BKEY: *out_category = "key";    return "blue_keycard";
+        case SPR_YKEY: *out_category = "key";    return "yellow_keycard";
+        case SPR_RKEY: *out_category = "key";    return "red_keycard";
+        case SPR_BSKU: *out_category = "key";    return "blue_skull";
+        case SPR_YSKU: *out_category = "key";    return "yellow_skull";
+        case SPR_RSKU: *out_category = "key";    return "red_skull";
+
+        // Ammo
+        case SPR_CLIP: *out_category = "ammo";   return "clip";
+        case SPR_AMMO: *out_category = "ammo";   return "ammo_box";
+        case SPR_BROK: *out_category = "ammo";   return "rocket_box";
+        case SPR_CELL: *out_category = "ammo";   return "cell";
+        case SPR_CELP: *out_category = "ammo";   return "cell_pack";
+        case SPR_SHEL: *out_category = "ammo";   return "shell";
+        case SPR_SBOX: *out_category = "ammo";   return "shell_box";
+        case SPR_BPAK: *out_category = "ammo";   return "backpack";
+
+        // Weapons
+        case SPR_BFUG: *out_category = "weapon"; return "bfg";
+        case SPR_MGUN: *out_category = "weapon"; return "chaingun";
+        case SPR_CSAW: *out_category = "weapon"; return "chainsaw";
+        case SPR_LAUN: *out_category = "weapon"; return "rocket_launcher";
+        case SPR_PLAS: *out_category = "weapon"; return "plasma_rifle";
+        case SPR_SHOT: *out_category = "weapon"; return "shotgun";
+        case SPR_SGN2: *out_category = "weapon"; return "super_shotgun";
+
+        // Hazards / interactables that block movement
+        case SPR_BAR1: *out_category = "barrel"; return "exploding_barrel";
+
+        default:
+            // Solid decoration (column, candle holder, tech pillar, ...)
+            if (mo->flags & MF_SOLID)
+            {
+                *out_category = "decor";
+                return "decoration";
+            }
+            // Non-solid pickup we don't have a name for, or a corpse.
+            *out_category = "unknown";
+            return NULL;
+    }
+}
+
+// State carried through the PT_traverser callback. P_PathTraverse takes a
+// plain function pointer with no userdata channel, so we stash this at
+// file scope. The Doom main loop is single-threaded under Emscripten so
+// no locking is needed.
+//
+// We record both the first blocking intercept (for the raycast hit
+// reported to the agent) and any non-blocking things the ray passes
+// through (pickups, decorative gibs we filter out later). The latter
+// feeds a separate "things_visible" array so the agent can see e.g.
+// "armour on a pedestal" instead of just "thing".
+#define WMCP_MAX_RAY_THINGS 4
+
+typedef struct {
+    fixed_t      frac;       // distance along the trace [0, FRACUNIT]
+    const mobj_t *mo;        // for sprite-based classification
+} wmcp_ray_thing_t;
+
+static struct {
+    fixed_t      hit_frac;   // fraction along the trace, FRACUNIT = full length
+    wmcp_hit_kind_t kind;
+    const mobj_t *hit_mo;    // mobj for WMCP_HIT_THING, else NULL
+    const mobj_t *self;      // player mobj, so we can skip self-hits
+
+    // Non-blocking pickups / pass-through things this ray crossed,
+    // in fraction order. Capped to avoid runaway in dense maps.
+    wmcp_ray_thing_t things[WMCP_MAX_RAY_THINGS];
+    int          thing_count;
+
+    // First interactable line (door / switch / exit) we passed through
+    // WITHOUT being blocked by it. A currently-open door, an unactivated
+    // switch in an open passage, etc. The ray keeps tracing past these,
+    // but if it reaches max range or hits a generic wall further on,
+    // we'd rather report this interactable in the hit field so the
+    // agent knows it exists.
+    fixed_t      crossed_frac;
+    wmcp_hit_kind_t crossed_kind;
+} wmcp_ray;
+
+// Classify a line special into one of our hit kinds. Returns
+// WMCP_HIT_WALL for a non-special line (caller decides whether that
+// really blocks based on the line's two-sidedness / opening).
+static wmcp_hit_kind_t
+wmcp_classify_special(short special)
+{
+    if (special == 0) return WMCP_HIT_WALL;
+
+    // Level exit switches (and walk-over).
+    if (special == 11 || special == 51 || special == 52 || special == 124)
+    {
+        return WMCP_HIT_EXIT;
+    }
+
+    // Door specials. Vanilla Doom has these spread across several ranges
+    // depending on action type (walk / switch / blazing / locked). We
+    // enumerate the ones actually used by the shipped IWADs rather than
+    // trying to derive them programmatically.
+    switch (special)
+    {
+        case 1: case 4: case 26: case 27: case 28: case 31: case 32:
+        case 33: case 34: case 46: case 63: case 90: case 105: case 108:
+        case 109: case 110: case 111: case 112: case 113: case 114:
+        case 115: case 116: case 117: case 118: case 133: case 134:
+        case 135: case 136: case 137:
+            return WMCP_HIT_DOOR;
+    }
+
+    // Anything else with a non-zero special is a switch or other
+    // interactable line (lifts, floor raises, light specials...). The
+    // agent mostly cares "is there something I can `use` here", so we
+    // collapse them all into "switch".
+    return WMCP_HIT_SWITCH;
+}
+
+// Traverser callback for raycasts. Returns false to stop traversal,
+// true to keep going. We stop at the first intercept that visually
+// blocks the player's line of sight; non-blocking lines (open
+// doorways, lines with sufficient opening) are skipped.
+static boolean
+wmcp_ray_traverse(intercept_t *in)
+{
+    if (in->isaline)
+    {
+        line_t *li = in->d.line;
+
+        // One-sided line: always a wall. Stop. If the line carries a
+        // special (e.g. wall-mounted exit switch), report that kind
+        // instead of the bare "wall".
+        if (li->backsector == NULL)
+        {
+            wmcp_ray.hit_frac = in->frac;
+            wmcp_ray.kind = wmcp_classify_special(li->special);
+            return false;
+        }
+
+        // Two-sided line. Compute the vertical opening between front
+        // and back sectors. If the opening is non-empty AND we're not
+        // explicitly blocked, the ray passes through.
+        P_LineOpening(li);
+
+        boolean blocked = (li->flags & ML_BLOCKING) != 0;
+        if (blocked || openrange <= 0)
+        {
+            wmcp_ray.hit_frac = in->frac;
+            // Closed-door-shaped specials are reported as door; the
+            // rest fall back to wall classification of the special.
+            if (li->special != 0)
+            {
+                wmcp_ray.kind = wmcp_classify_special(li->special);
+                // If it's classified as a wall (special 0 fallback)
+                // because the special isn't a door/switch/exit, force
+                // door when the line is currently closed.
+                if (wmcp_ray.kind == WMCP_HIT_WALL && openrange <= 0)
+                {
+                    wmcp_ray.kind = WMCP_HIT_DOOR;
+                }
+            }
+            else
+            {
+                // No special, but blocked: closed door or impassable
+                // line. Treat as door when there is no opening, else wall.
+                wmcp_ray.kind = (openrange <= 0) ? WMCP_HIT_DOOR
+                                                 : WMCP_HIT_WALL;
+            }
+            return false;
+        }
+
+        // Pass-through line. We don't stop the ray, but if this is
+        // an interactable line (door / switch / exit) we record the
+        // FIRST one we cross so the agent learns about open doors and
+        // wall switches reachable via `use`. Later wall hits along the
+        // same ray will overwrite kind; if no further hit happens, the
+        // crossed special is what we report.
+        if (li->special != 0 && wmcp_ray.crossed_kind == WMCP_HIT_NONE)
+        {
+            wmcp_hit_kind_t k = wmcp_classify_special(li->special);
+            if (k != WMCP_HIT_WALL)
+            {
+                wmcp_ray.crossed_kind = k;
+                wmcp_ray.crossed_frac = in->frac;
+            }
+        }
+        return true;
+    }
+    else
+    {
+        // Thing intercept. Skip self.
+        mobj_t *mo = in->d.thing;
+        if (mo == wmcp_ray.self) return true;
+
+        // Solid things block the ray (live monsters, exploding barrels,
+        // decorative columns, pedestals carrying pickups...). Record
+        // the mobj so the emitter can name it.
+        if (mo->flags & MF_SOLID)
+        {
+            wmcp_ray.hit_frac = in->frac;
+            wmcp_ray.kind = WMCP_HIT_THING;
+            wmcp_ray.hit_mo = mo;
+            return false;
+        }
+
+        // Non-solid thing: a pickup (MF_SPECIAL), a corpse, or gib.
+        // We don't stop the ray -- the agent's line of sight extends
+        // past these -- but we do record pickups so they show up in
+        // the separate things_visible array. Skip MF_CORPSE silently
+        // to avoid spamming the array with dead bodies.
+        if (!(mo->flags & MF_CORPSE) &&
+            wmcp_ray.thing_count < WMCP_MAX_RAY_THINGS)
+        {
+            wmcp_ray.things[wmcp_ray.thing_count].frac = in->frac;
+            wmcp_ray.things[wmcp_ray.thing_count].mo = mo;
+            wmcp_ray.thing_count++;
+        }
+        return true;
+    }
+}
+
+// Cast a single ray from (x1, y1) along world angle `aim` for
+// WMCP_RAY_RANGE map units. Writes the hit distance (map units, int)
+// and kind into the out params; *out_hit_mo is set to the blocking
+// mobj when kind == "thing" and NULL otherwise. distance is
+// WMCP_RAY_RANGE >> FRACBITS when nothing was hit.
+//
+// After this call, wmcp_ray.things[0..thing_count) holds any
+// non-blocking pickups the ray crossed, in order of increasing
+// distance. The caller drains these into the things_visible payload.
+static void
+wmcp_cast_ray(const mobj_t *self,
+              fixed_t x1, fixed_t y1, angle_t aim,
+              int *out_distance, const char **out_kind,
+              const mobj_t **out_hit_mo)
+{
+    fixed_t fineang = aim >> ANGLETOFINESHIFT;
+    fixed_t dx = FixedMul(WMCP_RAY_RANGE, finecosine[fineang]);
+    fixed_t dy = FixedMul(WMCP_RAY_RANGE, finesine[fineang]);
+    fixed_t x2 = x1 + dx;
+    fixed_t y2 = y1 + dy;
+
+    wmcp_ray.hit_frac = 0;
+    wmcp_ray.kind = WMCP_HIT_NONE;
+    wmcp_ray.hit_mo = NULL;
+    wmcp_ray.self = self;
+    wmcp_ray.thing_count = 0;
+    wmcp_ray.crossed_frac = 0;
+    wmcp_ray.crossed_kind = WMCP_HIT_NONE;
+
+    P_PathTraverse(x1, y1, x2, y2,
+                   PT_ADDLINES | PT_ADDTHINGS,
+                   wmcp_ray_traverse);
+
+    *out_hit_mo = wmcp_ray.hit_mo;
+
+    // Choose what to report. If the ray crossed an interactable (open
+    // door, wall switch, exit line) BEFORE hitting a blocker, prefer
+    // reporting that -- the agent cares more about "there is a door
+    // I can use 200u ahead" than "there is a wall 500u ahead". If
+    // both exist, the closer one wins on `frac`.
+    wmcp_hit_kind_t kind = wmcp_ray.kind;
+    fixed_t frac = wmcp_ray.hit_frac;
+    if (wmcp_ray.crossed_kind != WMCP_HIT_NONE)
+    {
+        if (kind == WMCP_HIT_NONE || wmcp_ray.crossed_frac < frac)
+        {
+            kind = wmcp_ray.crossed_kind;
+            frac = wmcp_ray.crossed_frac;
+            // A crossed-special never has a blocker mobj associated.
+            *out_hit_mo = NULL;
+        }
+    }
+
+    if (kind == WMCP_HIT_NONE)
+    {
+        *out_distance = WMCP_RAY_RANGE >> FRACBITS;
+        *out_kind = "open";
+        return;
+    }
+
+    // Convert fractional distance back to map units. frac is in
+    // [0, FRACUNIT]; multiply by the full ray length.
+    fixed_t dist = FixedMul(frac, WMCP_RAY_RANGE);
+    int dist_units = dist >> FRACBITS;
+    if (dist_units < 0) dist_units = 0;
+    *out_distance = dist_units;
+    *out_kind = wmcp_hit_kind_str(kind);
+}
+
+// Convert a BAM angle to integer degrees [0, 360).
+static int
+wmcp_bam_to_deg(angle_t a)
+{
+    // 0xFFFFFFFF / 360 ~= 11930465. Multiply then shift to round.
+    // Simpler: angle_t covers 0..2^32, mapping linearly to [0, 360).
+    // Use 64-bit math to avoid overflow.
+    unsigned long long d = (unsigned long long)a * 360ULL;
+    return (int)(d >> 32);
+}
+
+// Convert a signed delta angle (rel_a in BAM, may be negative when cast
+// to int32_t) to signed integer degrees in [-180, 180].
+static int
+wmcp_bam_signed_to_deg(int32_t rel_a)
+{
+    // rel_a wraps the full 2^32 range. Treating it as signed gives
+    // [-2^31, 2^31). Map that to [-180, 180].
+    long long d = (long long)rel_a * 360LL;
+    // Arithmetic shift on a signed long long is implementation-defined
+    // in pre-C99 but defined as floor in GCC/Clang, which is what we want.
+    return (int)(d >> 32);
+}
+
+// Emit the "player" object. Returns updated cursor or NULL on overflow.
+static char *
+wmcp_emit_player(char *cur, char *end, const player_t *p)
+{
+    if (p == NULL || p->mo == NULL)
+    {
+        int n = snprintf(cur, (size_t)(end - cur), "\"player\":null");
+        if (n < 0 || n >= (end - cur)) return NULL;
+        return cur + n;
+    }
+
+    const mobj_t *mo = p->mo;
+    int x = mo->x >> FRACBITS;
+    int y = mo->y >> FRACBITS;
+    int z = mo->z >> FRACBITS;
+    int angle_deg = wmcp_bam_to_deg(mo->angle);
+    int momx = mo->momx >> FRACBITS;
+    int momy = mo->momy >> FRACBITS;
+
+    int n = snprintf(cur, (size_t)(end - cur),
+        "\"player\":{\"x\":%d,\"y\":%d,\"z\":%d,"
+        "\"angle_deg\":%d,\"momx\":%d,\"momy\":%d}",
+        x, y, z, angle_deg, momx, momy);
+    if (n < 0 || n >= (end - cur)) return NULL;
+    return cur + n;
+}
+
+// Aggregated things-visible record. We dedupe by mobj pointer across
+// the 8 rays so the same pedestal-mounted armour doesn't get reported
+// once per ray that grazes it. Keep the entry with the smallest
+// distance so the agent sees the closest sighting per object.
+#define WMCP_MAX_THINGS_VISIBLE 16
+
+typedef struct {
+    const mobj_t *mo;
+    int           bearing_deg;
+    int           distance;
+} wmcp_visible_t;
+
+// Returns the index of mo in vis[0..count) if already seen, else -1.
+static int
+wmcp_visible_find(const wmcp_visible_t *vis, int count, const mobj_t *mo)
+{
+    for (int i = 0; i < count; i++)
+    {
+        if (vis[i].mo == mo) return i;
+    }
+    return -1;
+}
+
+// Record (or update) a thing sighting. Keeps the smaller distance.
+static void
+wmcp_visible_record(wmcp_visible_t *vis, int *count,
+                    const mobj_t *mo, int bearing_deg, int distance)
+{
+    if (mo == NULL) return;
+    int idx = wmcp_visible_find(vis, *count, mo);
+    if (idx >= 0)
+    {
+        if (distance < vis[idx].distance)
+        {
+            vis[idx].distance = distance;
+            vis[idx].bearing_deg = bearing_deg;
+        }
+        return;
+    }
+    if (*count >= WMCP_MAX_THINGS_VISIBLE) return;
+    vis[*count].mo = mo;
+    vis[*count].bearing_deg = bearing_deg;
+    vis[*count].distance = distance;
+    (*count)++;
+}
+
+// Emit the "raycasts" array, and as a side-effect populate
+// *out_visible / *out_visible_count with deduped things crossed by any
+// of the 8 rays (both the solid blocker per ray and any pass-through
+// pickups). Returns updated cursor or NULL on overflow.
+static char *
+wmcp_emit_raycasts(char *cur, char *end, const player_t *p,
+                   wmcp_visible_t *out_visible, int *out_visible_count)
+{
+    *out_visible_count = 0;
+
+    int n = snprintf(cur, (size_t)(end - cur), "\"raycasts\":[");
+    if (n < 0 || n >= (end - cur)) return NULL;
+    cur += n;
+
+    if (p == NULL || p->mo == NULL)
+    {
+        if (cur >= end) return NULL;
+        *cur++ = ']';
+        return cur;
+    }
+
+    const mobj_t *self = p->mo;
+    fixed_t x1 = self->x;
+    fixed_t y1 = self->y;
+    angle_t base = self->angle;
+
+    // 8 rays evenly spaced across [-WMCP_RAY_HALF_FOV, +WMCP_RAY_HALF_FOV].
+    // Step in BAM: 2 * half_fov / (N - 1).
+    angle_t step = (angle_t)((2 * (unsigned)WMCP_RAY_HALF_FOV)
+                             / (unsigned)(WMCP_NUM_RAYS - 1));
+
+    for (int i = 0; i < WMCP_NUM_RAYS; i++)
+    {
+        // Doom angles increase counter-clockwise (east = 0, north = ANG90).
+        // A ray rotated to the player's left in screen-space is at a
+        // larger BAM angle (+rel); a ray to the right is at a smaller
+        // BAM angle (-rel). Our public bearing_deg uses the more
+        // intuitive screen convention: positive = right, negative = left.
+        // So we sweep the BAM-relative offset from +HALF_FOV (leftmost)
+        // down to -HALF_FOV (rightmost), and report bearing_deg as the
+        // negation of that BAM-relative offset in degrees.
+        int32_t rel_bam = (int32_t)WMCP_RAY_HALF_FOV - (int32_t)(step * i);
+        angle_t aim = base + (angle_t)rel_bam;
+        int bearing_deg = -wmcp_bam_signed_to_deg(rel_bam);
+
+        int distance = 0;
+        const char *kind = "open";
+        const mobj_t *hit_mo = NULL;
+        wmcp_cast_ray(self, x1, y1, aim, &distance, &kind, &hit_mo);
+
+        // Emit the raycast entry. If the blocker is a thing we can
+        // classify, include thing_type/thing_category inline so an
+        // agent reading the raycasts directly knows what's blocking
+        // without cross-referencing things_visible.
+        const char *thing_type = NULL;
+        const char *thing_category = NULL;
+        if (hit_mo != NULL)
+        {
+            thing_type = wmcp_classify_thing(hit_mo, &thing_category);
+            wmcp_visible_record(out_visible, out_visible_count,
+                                hit_mo, bearing_deg, distance);
+        }
+
+        int written;
+        if (thing_type != NULL)
+        {
+            written = snprintf(cur, (size_t)(end - cur),
+                "%s{\"bearing_deg\":%d,\"distance\":%d,\"hit\":\"%s\","
+                "\"thing_type\":\"%s\",\"thing_category\":\"%s\"}",
+                i == 0 ? "" : ",",
+                bearing_deg, distance, kind,
+                thing_type, thing_category);
+        }
+        else
+        {
+            written = snprintf(cur, (size_t)(end - cur),
+                "%s{\"bearing_deg\":%d,\"distance\":%d,\"hit\":\"%s\"}",
+                i == 0 ? "" : ",",
+                bearing_deg, distance, kind);
+        }
+        if (written < 0 || written >= (end - cur)) return NULL;
+        cur += written;
+
+        // Record pass-through pickups for things_visible. The ray
+        // already walked them in fraction order.
+        for (int t = 0; t < wmcp_ray.thing_count; t++)
+        {
+            fixed_t f = wmcp_ray.things[t].frac;
+            fixed_t d = FixedMul(f, WMCP_RAY_RANGE);
+            int d_units = d >> FRACBITS;
+            if (d_units < 0) d_units = 0;
+            wmcp_visible_record(out_visible, out_visible_count,
+                                wmcp_ray.things[t].mo, bearing_deg, d_units);
+        }
+    }
+
+    if (cur >= end) return NULL;
+    *cur++ = ']';
+    return cur;
+}
+
+// Emit the "things_visible" array from the aggregated sightings.
+// Filters out unclassified mobjs so the array only contains things
+// the agent can meaningfully reason about.
+static char *
+wmcp_emit_things_visible(char *cur, char *end,
+                         const wmcp_visible_t *vis, int count)
+{
+    int n = snprintf(cur, (size_t)(end - cur), "\"things_visible\":[");
+    if (n < 0 || n >= (end - cur)) return NULL;
+    cur += n;
+
+    int emitted = 0;
+    for (int i = 0; i < count; i++)
+    {
+        const char *category = NULL;
+        const char *type = wmcp_classify_thing(vis[i].mo, &category);
+        if (type == NULL) continue;
+
+        int written = snprintf(cur, (size_t)(end - cur),
+            "%s{\"type\":\"%s\",\"category\":\"%s\","
+            "\"bearing_deg\":%d,\"distance\":%d}",
+            emitted == 0 ? "" : ",",
+            type, category,
+            vis[i].bearing_deg, vis[i].distance);
+        if (written < 0 || written >= (end - cur)) return NULL;
+        cur += written;
+        emitted++;
+    }
+
+    if (cur >= end) return NULL;
+    *cur++ = ']';
+    return cur;
+}
+
 EMSCRIPTEN_KEEPALIVE
 const char *
 wmcp_get_state_json(void)
@@ -470,8 +1104,73 @@ wmcp_get_state_json(void)
         if (p->cards[it_redskull])   { cur = wmcp_append_key(cur, end, &first, "red_skull");      if (!cur) goto overflow; }
     }
 
-    // Close keys/hud, open enemies.
-    n = snprintf(cur, (size_t)(end - cur), "]},\"enemies_visible\":[");
+    // Close keys/hud.
+    n = snprintf(cur, (size_t)(end - cur), "]},");
+    if (n < 0 || n >= (end - cur)) goto overflow;
+    cur += n;
+
+    // Player pose and raycasts. Both are only meaningful while the
+    // engine has a live player mobj on a map -- during the title /
+    // intermission / finale screens the player pointer may be valid but
+    // the position is stale, and raycasts would walk a freed BSP. We
+    // emit them for "playing", "dead" and "automap" (same predicate as
+    // hud_ok plus a live mobj).
+    const int spatial_ok = hud_ok && p != NULL && p->mo != NULL &&
+        (strcmp(screen, "playing") == 0 ||
+         strcmp(screen, "automap") == 0 ||
+         strcmp(screen, "dead") == 0);
+
+    // Aggregated things-visible buffer, populated as a side-effect of
+    // wmcp_emit_raycasts. Kept on the stack -- 16 entries * ~24 bytes
+    // is comfortably under any frame's stack budget.
+    wmcp_visible_t visible[WMCP_MAX_THINGS_VISIBLE];
+    int visible_count = 0;
+
+    if (spatial_ok)
+    {
+        cur = wmcp_emit_player(cur, end, p);
+        if (cur == NULL) goto overflow;
+
+        if (cur + 1 >= end) goto overflow;
+        *cur++ = ',';
+
+        // Raycasts are only useful while alive: when the player is dead
+        // the mobj's view height collapses and casting from the corpse
+        // returns confusing data. Suppress them in the "dead" screen.
+        if (strcmp(screen, "dead") != 0)
+        {
+            cur = wmcp_emit_raycasts(cur, end, p, visible, &visible_count);
+            if (cur == NULL) goto overflow;
+            if (cur + 1 >= end) goto overflow;
+            *cur++ = ',';
+        }
+        else
+        {
+            n = snprintf(cur, (size_t)(end - cur), "\"raycasts\":[],");
+            if (n < 0 || n >= (end - cur)) goto overflow;
+            cur += n;
+        }
+
+        // Things visible along any of the 8 rays (deduped). This
+        // covers solid blockers (pedestals, barrels, live monsters)
+        // AND non-solid pickups the ray passes through (armour,
+        // health, ammo, weapons, keys), each with a category so the
+        // agent can prioritise without an item-name lookup table.
+        cur = wmcp_emit_things_visible(cur, end, visible, visible_count);
+        if (cur == NULL) goto overflow;
+        if (cur + 1 >= end) goto overflow;
+        *cur++ = ',';
+    }
+    else
+    {
+        n = snprintf(cur, (size_t)(end - cur),
+                     "\"player\":null,\"raycasts\":[],\"things_visible\":[],");
+        if (n < 0 || n >= (end - cur)) goto overflow;
+        cur += n;
+    }
+
+    // Open enemies array.
+    n = snprintf(cur, (size_t)(end - cur), "\"enemies_visible\":[");
     if (n < 0 || n >= (end - cur)) goto overflow;
     cur += n;
 
@@ -518,6 +1217,7 @@ overflow:
         "{\"screen\":\"unknown\",\"hud\":{\"health\":-1,\"armor\":-1,"
         "\"ammo\":-1,\"ammo_type\":\"unknown\",\"weapon\":\"unknown\","
         "\"face_state\":\"unknown\",\"keys\":[]},"
+        "\"player\":null,\"raycasts\":[],\"things_visible\":[],"
         "\"enemies_visible\":[],\"in_combat\":false,\"low_health\":false,"
         "\"caption\":\"buffer overflow\"}");
     return wmcp_buf;

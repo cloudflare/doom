@@ -1,0 +1,37 @@
+{
+	"name": "doom-player",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"main": "src/index.ts",
+	"scripts": {
+		"dev": "X_BROWSER_HEADFUL=true vite dev",
+		"dev:headless": "vite dev",
+		"start": "vite dev",
+		"build": "vite build",
+		"preview": "npm run build && vite preview",
+		"deploy": "npm run build && wrangler deploy",
+		"test": "vitest",
+		"check": "tsc --noEmit",
+		"cf-typegen": "wrangler types"
+	},
+	"devDependencies": {
+		"@cloudflare/vite-plugin": "^1.37.2",
+		"@types/react": "^19.2.15",
+		"@types/react-dom": "^19.2.3",
+		"@vitejs/plugin-react": "^6.0.2",
+		"typescript": "^5.9.2",
+		"vite": "^8.0.13",
+		"wrangler": "^4.93.0"
+	},
+	"dependencies": {
+		"@cloudflare/codemode": "^0.3.6",
+		"@cloudflare/puppeteer": "^1.1.0",
+		"@codemirror/lang-javascript": "^6.2.5",
+		"@uiw/react-codemirror": "^4.25.9",
+		"ai": "^6.0.0",
+		"react": "^19.2.6",
+		"react-dom": "^19.2.6",
+		"zod": "^4.0.0"
+	}
+}

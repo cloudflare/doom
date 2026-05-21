@@ -36,6 +36,21 @@ Once it's running just point multiple browser windows at http://localhost:1234/ 
 
 To deploy to Cloudflare type `make deploy-production`. Change `CLOUDFLARE_ACCOUNT_ID` in `.dev.vars` to match your account id.
 
+## doom-player
+
+[`./doom-player`](./doom-player) is a separate Worker that drives Agentic Doom from the server side. It opens a [Browser Rendering](https://developers.cloudflare.com/browser-rendering/) session, attaches to the Agentic Doom page via Chrome DevTools Protocol, walks the menus into a playable level, and then runs a user-authored "bot" inside a [`@cloudflare/codemode`](https://github.com/cloudflare/agents/tree/main/packages/codemode) sandbox. The bot speaks to the engine through the same WebMCP tools (`get_state`, `press_key`, ...) that this project exposes.
+
+It has its own `package.json`, `wrangler.jsonc`, and Vite config and is independent of the main Worker — install / dev / deploy from inside the subdir:
+
+```
+cd doom-player
+npm install
+npm run dev      # vite dev server with @cloudflare/vite-plugin
+npm run deploy   # vite build && wrangler deploy
+```
+
+The UI (React + CodeMirror, served as static assets) provides an editor with a few example bots (walk-forward, combat, state inspector, and a full deterministic auto-player) and streams the worker's tick-by-tick output back as `text/plain`. Set `DOOM_URL` in `wrangler.jsonc` to point at your deployed Agentic Doom instance.
+
 ## Compiling Doom
 
 The patched version of Chocolate Doom we use can be found at [./doom/src](doom/src). You can add your own changes to the code and recompile Doom.We added a few utility scripts to the root Makefile to clean and compile the Doom sources and to copy the Wasm builds to the Worker project:
