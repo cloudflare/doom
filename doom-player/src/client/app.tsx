@@ -502,18 +502,23 @@ const TICK_MS = 200;
 const TURN_TOLERANCE_DEG = 18;  // dead-band: don't bother correcting <18°
 const TURN_HOLD_MIN_MS = 140;   // shortest turn tap
 const TURN_HOLD_MAX_MS = 500;   // longest single turn tap (big errors)
-// Doom's player.momx / player.momy are LAGGY (see the \`get_state\` tool
-// description in src/app/lib/webmcp.tsx): they trail keydown -> ticcmd
-// -> thrust by 1-2 engine tics, so the first state read after a
-// press_key('up') routinely returns mom=(0,0) even though the player
-// is already moving. We instead track the change in player.x / player.y
-// between consecutive get_state calls — position is current the tic
-// it's sampled, so a non-zero pos delta is ground truth that the player
-// actually moved.
+// Every field returned by get_state is a snapshot of the last completed
+// 35Hz engine tic (see the \`get_state\` tool description in
+// src/app/lib/webmcp.tsx). After a press_key our keydown -> ticcmd ->
+// thrust pipeline can leave the next get_state still showing the
+// previous tic's pose, raycasts, momx/momy, things, etc.
+//
+// momx/momy are the most visibly laggy because they require the thrust
+// step to have run, but x/y/angle/raycasts can also briefly trail.
+// Position eventually becomes ground truth because the displacement
+// from a press accumulates over multiple tics, so deltas between two
+// consecutive reads are a reliable "did anything happen?" signal even
+// when one read is stale. We use position-delta-over-multiple-ticks
+// for wedge detection; momentum is just logged for context.
 const STUCK_POS_EPS = 4;        // units of pos delta below this = stuck
 const STUCK_TICKS = 3;          // consecutive stuck ticks before unsticking
-// Kept for the rare "I want a real-speed estimate" path; not used for
-// wedge detection any more.
+// Kept for the per-tick log and steady-state speed estimates only;
+// not used for wedge detection any more.
 const STUCK_MOM_EPS = 0.5;
 
 // @cf/meta/llama-3.2-11b-vision-instruct requires that you agree with their terms
