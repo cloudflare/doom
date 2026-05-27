@@ -313,3 +313,104 @@ button.primary:hover:not(:disabled) {
 	max-height: 40%;
 	min-height: 120px;
 }
+
+/* bot.logImage(...) debug panel. Only the most-recent image is kept;
+   rendered just above the log strip / DevTools embed so a human can
+   eyeball what the bot is seeing. */
+.debug-image {
+	border-top: 1px solid #333;
+	border-bottom: 1px solid #333;
+	padding: 6px 8px;
+	background: #0b0b0b;
+}
+.debug-image-caption {
+	margin-top: 4px;
+	font-size: 11px;
+	color: #aaa;
+	font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Two-column container inside the log pane: log on the left, debug
+   image sidebar on the right. The sidebar collapses to zero-width when
+   the user hides it, giving the log full width. */
+.log-with-image {
+	display: flex;
+	flex-direction: row;
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow: hidden;
+}
+.log-main {
+	flex: 1 1 auto;
+	min-width: 0;
+	display: flex;
+	flex-direction: column;
+}
+.debug-image-side {
+	/* Doom's native framebuffer is 320x200; reserve exactly that width
+	   (plus a few pixels of chrome) so images render 1:1 without
+	   scaling and the sidebar can never grow past the engine's
+	   natural resolution. */
+	flex: 0 0 320px;
+	max-width: 50%;
+	border-left: 1px solid #333;
+	background: #0b0b0b;
+	display: flex;
+	flex-direction: column;
+	overflow: auto;
+}
+.debug-image-header {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 6px;
+	border-bottom: 1px solid #222;
+	background: #111;
+}
+.debug-image-title {
+	font-size: 11px;
+	color: #888;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+.debug-image-collapse {
+	margin-left: auto;
+	background: transparent;
+	border: none;
+	color: #888;
+	font-size: 16px;
+	line-height: 1;
+	cursor: pointer;
+	padding: 0 4px;
+}
+.debug-image-collapse:hover {
+	color: #fff;
+}
+.debug-image-img {
+	/* Preserve the image's real aspect ratio but bound the rendered
+	   size so the sidebar layout stays predictable regardless of what
+	   the bot dumped. Width fills the sidebar (capped at the panel's
+	   320px chrome), height tops out at 200px; \`object-fit: contain\`
+	   letterboxes anything that isn't 8:5. */
+	display: block;
+	width: 100%;
+	max-width: 320px;
+	max-height: 200px;
+	height: auto;
+	background: #000;
+	image-rendering: pixelated;
+	object-fit: contain;
+}
+
+/* One image entry within the multi-image sidebar. Up to IMAGE_HISTORY
+   entries stack vertically, separated by a thin divider. */
+.debug-image-entry {
+	border-bottom: 1px solid #1c1c1c;
+	padding: 4px 0 8px;
+}
+.debug-image-entry:last-child {
+	border-bottom: none;
+}
+.debug-image-entry .debug-image-caption {
+	padding: 0 6px;
+}

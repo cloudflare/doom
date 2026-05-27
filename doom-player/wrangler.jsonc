@@ -23,5 +23,8 @@
   },
   "vars": {
     "DOOM_URL": "https://dev.silentspacemarine.com/"
+  },
+  "ai": {
+    "binding": "AI"
   }
 }

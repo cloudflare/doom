@@ -42,6 +42,15 @@ export interface RunBotOptions extends BotContextOptions {
   /** Live WebMCP client. Must have completed its preroll. */
   webmcp: WebMCPClient;
   /**
+   * Optional Workers AI binding. When supplied, the sandbox gets an
+   * extra namespace `ai` with a single `run(model, input, options?)`
+   * method that proxies straight to `env.AI.run`. When omitted (e.g.
+   * the `ai` block is removed from wrangler.jsonc) the namespace is
+   * not registered, so calls like `await ai.run(...)` simply throw a
+   * "ai is not defined" reference error in the sandbox.
+   */
+  ai?: Ai;
+  /**
    * Hard timeout for the bot, in milliseconds. Defaults to 60_000.
    * Note: this is enforced *inside* the sandboxed worker by codemode,
    * so it bounds bot execution but does not protect against tool calls
@@ -91,9 +100,39 @@ export async function runBot(opts: RunBotOptions): Promise<RunBotResult> {
       sleep: async (ms: unknown) =>
         ctx.sleep(typeof ms === "number" ? ms : Number(ms) || 0),
       log: async (...args: unknown[]) => ctx.log(...args),
+      screenshot: async () => ctx.screenshot(),
+      logImage: async (shot: unknown, caption?: unknown) =>
+        ctx.logImage(
+          shot as { data: string; mimeType: string },
+          typeof caption === "string" ? caption : undefined,
+        ),
+      encodePng: async (width: unknown, height: unknown, rgba: unknown) =>
+        ctx.encodePng(
+          Number(width),
+          Number(height),
+          rgba as Uint8Array | number[],
+        ),
     },
     positionalArgs: true,
   };
+
+  const providers: ResolvedProvider[] = [provider];
+
+  if (opts.ai) {
+    const ai = opts.ai;
+    providers.push({
+      name: "ai",
+      fns: {
+        run: async (model: unknown, input: unknown, options?: unknown) =>
+          (ai.run as (m: string, i: unknown, o?: unknown) => Promise<unknown>)(
+            String(model),
+            input,
+            options,
+          ),
+      },
+      positionalArgs: true,
+    });
+  }
 
   const executor = new DynamicWorkerExecutor({
     loader: opts.loader,
@@ -102,7 +141,7 @@ export async function runBot(opts: RunBotOptions): Promise<RunBotResult> {
     globalOutbound: null,
   });
 
-  const exec = await executor.execute(opts.code, [provider]);
+  const exec = await executor.execute(opts.code, providers);
 
   return {
     ok: !exec.error,
